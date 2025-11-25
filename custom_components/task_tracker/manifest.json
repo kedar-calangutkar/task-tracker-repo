@@ -1,0 +1,10 @@
+{
+  "domain": "task_tracker",
+  "name": "Task Tracker",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/kedar-calangutkar/task_tracker",
+  "requirements": ["python-dateutil"],
+  "iot_class": "local_polling",
+  "version": "1.0.1"
+}
