@@ -1,0 +1,21 @@
+complete_task:
+  name: Complete Task
+  description: Marks a task as done. You can optionally specify a date in the past.
+  target:
+    entity:
+      integration: task_tracker
+      domain: sensor
+  fields:
+    last_done:
+      name: Date Done
+      description: The date/time when the task was completed. Defaults to 'now' if omitted.
+      selector:
+        datetime:
+
+reset_history:
+  name: Reset History
+  description: Clears the completion history. Useful for resetting the predictive logic or fixing data errors.
+  target:
+    entity:
+      integration: task_tracker
+      domain: sensor
