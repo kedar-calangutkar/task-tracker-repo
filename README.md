@@ -1,4 +1,4 @@
-Homey Task Tracker
+Task Tracker
 A smart custom integration for Home Assistant to track recurring chores, maintenance tasks, and personal habits.
 Unlike standard calendar events, Task Tracker calculates due dates based on when you actually completed the task, offering "sliding" intervals, strict schedules, and AI-lite predictive scheduling.
 ✨ Features
@@ -48,7 +48,7 @@ Method 2: HACS (Custom Repository)
 Note: This integration does not use YAML configuration.
  * Go to Settings > Devices & Services.
  * Click + Add Integration.
- * Search for Homey Task Tracker.
+ * Search for Task Tracker.
  * Step 1: Enter the Task Name and select the Logic Type.
  * Step 2: Configure the details:
    * Interval/Schedule: Set days, times, or intervals based on the type.
@@ -124,4 +124,5 @@ content: >
   {% else %}
   No history yet.
   {% endif %}
+
 
