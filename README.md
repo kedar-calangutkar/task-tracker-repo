@@ -80,17 +80,21 @@ To change a schedule or rename a task, simply click the Configure button on the 
 Marks a task as done.
  * Arguments: last_done (Optional): Specify a date/time in the past if you forgot to log it earlier.
 <!-- end list -->
+```
 action: task_tracker.complete_task
 target:
   entity_id: sensor.change_hvac_filter
 data:
   last_done: "2023-10-25 14:00:00"
+```
 
 ### task_tracker.reset_history
 Wipes the audit log and resets the "Last Done" date. Useful if you made a mistake or want to restart the Predictive logic learning.
+```
 action: task_tracker.reset_history
 target:
   entity_id: sensor.cut_nails
+```
 
 ## 📱 Dashboard Examples
 1. The "Mark Done" Button (Tile Card)
@@ -146,3 +150,4 @@ content: >
   No history yet.
   {% endif %}
 ```
+
