@@ -9,6 +9,8 @@ from .const import DOMAIN
 
 SERVICE_COMPLETE_TASK = "complete_task"
 SERVICE_RESET_HISTORY = "reset_history"
+SERVICE_SNOOZE_TASK = "snooze_task"
+SERVICE_UNSNOOZE_TASK = "unsnooze_task"
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the Task Tracker services."""
@@ -42,8 +44,39 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                     if hasattr(entity, "reset_history"):
                         await entity.reset_history()
 
+    async def handle_snooze_task(call: ServiceCall):
+        entity_ids = call.data.get("entity_id")
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+            
+        until_str = call.data.get("until")
+        until_date = None
+        if until_str:
+            until_date = dt_util.parse_datetime(until_str)
+
+        platforms = async_get_platforms(hass, DOMAIN)
+        for platform in platforms:
+            for entity in platform.entities.values():
+                if entity.entity_id in entity_ids:
+                    if hasattr(entity, "snooze_task"):
+                        await entity.snooze_task(until_date)
+
+    async def handle_unsnooze_task(call: ServiceCall):
+        entity_ids = call.data.get("entity_id")
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+            
+        platforms = async_get_platforms(hass, DOMAIN)
+        for platform in platforms:
+            for entity in platform.entities.values():
+                if entity.entity_id in entity_ids:
+                    if hasattr(entity, "unsnooze_task"):
+                        await entity.unsnooze_task()
+
     hass.services.async_register(DOMAIN, SERVICE_COMPLETE_TASK, handle_complete_task)
     hass.services.async_register(DOMAIN, SERVICE_RESET_HISTORY, handle_reset_history)
+    hass.services.async_register(DOMAIN, SERVICE_SNOOZE_TASK, handle_snooze_task)
+    hass.services.async_register(DOMAIN, SERVICE_UNSNOOZE_TASK, handle_unsnooze_task)
     
     return True
 

@@ -148,3 +148,36 @@ async def test_metadata_attributes(mock_hass):
     
     assert attrs["tags"] == ["chores", "kitchen"]
     assert attrs["assignees"] == ["me"]
+
+# --- TEST SNOOZE LOGIC ---
+async def test_snooze_task_logic(mock_hass, mock_now):
+    """Test that snoozing updates state but preserves next_due."""
+    config = {
+        CONF_NAME: "Snooze Test Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_ICON: DEFAULT_ICON
+    }
+    
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        sensor.hass = mock_hass
+        sensor._update_state()
+        
+        expected_due = mock_now + timedelta(days=7)
+        assert sensor._next_due == expected_due
+        assert "Due in 7 days" in sensor.native_value
+        
+        # Snooze for 2 days
+        snooze_until = mock_now + timedelta(days=2)
+        await sensor.snooze_task(snooze_until)
+        
+        # Check state is Snoozed, but next_due is unchanged!
+        assert sensor.native_value == "Snoozed"
+        assert sensor.extra_state_attributes["snoozed_until"] == snooze_until.isoformat()
+        assert sensor.extra_state_attributes["next_due"] == expected_due.isoformat()
+        
+        # Unsnooze manually
+        await sensor.unsnooze_task()
+        assert "Due in 7 days" in sensor.native_value
+        assert "snoozed_until" not in sensor.extra_state_attributes

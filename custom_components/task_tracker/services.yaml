@@ -19,3 +19,26 @@ reset_history:
     entity:
       integration: task_tracker
       domain: sensor
+
+snooze_task:
+  name: Snooze Task
+  description: Snoozes a task until a specific date and time. The due date calculation will not change, but it stops being marked as 'Overdue'.
+  target:
+    entity:
+      integration: task_tracker
+      domain: sensor
+  fields:
+    until:
+      name: Snooze Until
+      description: The date/time until which the task should be snoozed.
+      required: true
+      selector:
+        datetime:
+
+unsnooze_task:
+  name: Unsnooze Task
+  description: Clears the snooze from a task, returning it to its normal due/overdue state immediately.
+  target:
+    entity:
+      integration: task_tracker
+      domain: sensor
