@@ -7,9 +7,10 @@ from dateutil import rrule
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -96,7 +97,9 @@ class TaskSensor(SensorEntity, RestoreEntity):
         self._last_done = None
         self._next_due = None
         self._days_remaining = None
+        self._snoozed_until = None
         self._history = [] 
+        self._snooze_unsub = None
 
     @property
     def name(self):
@@ -124,7 +127,9 @@ class TaskSensor(SensorEntity, RestoreEntity):
             attributes["next_due"] = self._next_due.isoformat()
         if self._days_remaining is not None:
             attributes["days_remaining"] = self._days_remaining
-        
+        if self._snoozed_until:
+            attributes["snoozed_until"] = self._snoozed_until.isoformat()
+            
         if self._history:
             attributes["history"] = [d.isoformat() for d in self._history]
             
@@ -161,6 +166,12 @@ class TaskSensor(SensorEntity, RestoreEntity):
                 except Exception:
                     pass
 
+            if last_state.attributes.get("snoozed_until"):
+                try:
+                    self._snoozed_until = dt_util.parse_datetime(last_state.attributes["snoozed_until"])
+                except Exception:
+                    pass
+
             if last_state.attributes.get("history"):
                 try:
                     raw_history = last_state.attributes["history"]
@@ -169,6 +180,33 @@ class TaskSensor(SensorEntity, RestoreEntity):
                     pass
         
         self._update_state()
+        self._schedule_snooze_expiration()
+
+    async def async_will_remove_from_hass(self):
+        """Clean up when entity is removed."""
+        if self._snooze_unsub:
+            self._snooze_unsub()
+            self._snooze_unsub = None
+
+    def _schedule_snooze_expiration(self):
+        """Set a timer to wake up the sensor when snooze expires."""
+        if self._snooze_unsub:
+            self._snooze_unsub()
+            self._snooze_unsub = None
+
+        if self._snoozed_until:
+            now = dt_util.now()
+            if self._snoozed_until > now:
+                self._snooze_unsub = async_track_point_in_time(
+                    self.hass, self._async_snooze_expired, self._snoozed_until
+                )
+
+    @callback
+    def _async_snooze_expired(self, now):
+        """Handle the exact moment a snooze expires."""
+        self._snooze_unsub = None
+        self._update_state()
+        self.async_write_ha_state()
 
     def _update_state(self):
         """Calculate next due date."""
@@ -269,6 +307,15 @@ class TaskSensor(SensorEntity, RestoreEntity):
                 self._days_remaining = None
                 self._icon = "mdi:help-circle-outline"
 
+            # --- SNOOZE OVERRIDE LOGIC ---
+            # If the task is snoozed, override the display state but preserve the next_due calculation
+            if self._snoozed_until:
+                if now < self._snoozed_until:
+                    self._state = "Snoozed"
+                    self._icon = "mdi:alarm-snooze"
+                else:
+                    self._snoozed_until = None # Snooze has expired, clear it naturally
+
         except Exception as e:
             _LOGGER.error(f"Error updating task {self._name}: {e}")
             self._state = "Error"
@@ -290,12 +337,34 @@ class TaskSensor(SensorEntity, RestoreEntity):
         if self._history:
             self._last_done = self._history[-1]
             
+        self._snoozed_until = None # Clear snooze when completed
         self._update_state()
+        self._schedule_snooze_expiration()
         self.async_write_ha_state()
 
     async def reset_history(self):
         """Action: Clear history and reset state."""
         self._history = []
         self._last_done = None
+        self._snoozed_until = None
         self._update_state()
+        self._schedule_snooze_expiration()
+        self.async_write_ha_state()
+
+    async def snooze_task(self, until_date):
+        """Action: Snooze the task until a specific date."""
+        if until_date:
+            snooze_time = until_date
+            if snooze_time.tzinfo is None:
+                snooze_time = snooze_time.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+            self._snoozed_until = snooze_time
+            self._update_state()
+            self._schedule_snooze_expiration()
+            self.async_write_ha_state()
+
+    async def unsnooze_task(self):
+        """Action: Clear the snooze state."""
+        self._snoozed_until = None
+        self._update_state()
+        self._schedule_snooze_expiration()
         self.async_write_ha_state()
