@@ -13,7 +13,6 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
-    SelectOptionDict,
     TimeSelector,
     IconSelector,
     NumberSelector,
@@ -28,20 +27,21 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Replaced SelectOptionDict with plain dicts for maximum HA version compatibility
 TYPE_OPTIONS = [
-    SelectOptionDict(value=TYPE_FIXED, label="Fixed Schedule"),
-    SelectOptionDict(value=TYPE_SLIDING, label="Sliding Interval"),
-    SelectOptionDict(value=TYPE_PREDICTIVE, label="Predictive"),
+    {"value": TYPE_FIXED, "label": "Fixed Schedule"},
+    {"value": TYPE_SLIDING, "label": "Sliding Interval"},
+    {"value": TYPE_PREDICTIVE, "label": "Predictive"},
 ]
 
 DAY_OPTIONS = [
-    SelectOptionDict(value="mon", label="Monday"),
-    SelectOptionDict(value="tue", label="Tuesday"),
-    SelectOptionDict(value="wed", label="Wednesday"),
-    SelectOptionDict(value="thu", label="Thursday"),
-    SelectOptionDict(value="fri", label="Friday"),
-    SelectOptionDict(value="sat", label="Saturday"),
-    SelectOptionDict(value="sun", label="Sunday"),
+    {"value": "mon", "label": "Monday"},
+    {"value": "tue", "label": "Tuesday"},
+    {"value": "wed", "label": "Wednesday"},
+    {"value": "thu", "label": "Thursday"},
+    {"value": "fri", "label": "Friday"},
+    {"value": "sat", "label": "Saturday"},
+    {"value": "sun", "label": "Sunday"},
 ]
 
 class TaskTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -87,7 +87,7 @@ class TaskTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             final_data = {**self.task_info, **user_input}
             return self.async_create_entry(
-                title=self.task_info[CONF_NAME], 
+                title=self.task_info.get(CONF_NAME, "Task"), 
                 data=final_data
             )
 
@@ -109,23 +109,22 @@ class TaskTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             user_id = person.attributes.get("user_id")
             if user_id:
                 friendly_name = person.attributes.get("friendly_name", person.entity_id)
-                user_options.append(
-                    SelectOptionDict(value=user_id, label=friendly_name)
-                )
+                user_options.append({"value": user_id, "label": friendly_name})
+                
         if not user_options:
-            user_options = [SelectOptionDict(value="none", label="No Persons Found")]
+            user_options = [{"value": "none", "label": "No Persons Found"}]
         return user_options
 
     def _get_tag_options(self):
         existing_tags = set()
         for entry in self.hass.config_entries.async_entries(DOMAIN):
-            tags = entry.data.get(CONF_TAGS, [])
+            tags = entry.data.get(CONF_TAGS) or []
             # Also check options since that is where edits live!
             if not tags: 
-                 tags = entry.options.get(CONF_TAGS, [])
+                 tags = entry.options.get(CONF_TAGS) or []
 
             if isinstance(tags, list):
-                existing_tags.update(tags)
+                existing_tags.update([str(t) for t in tags if t]) # Protect against None elements
             elif isinstance(tags, str) and tags.strip():
                 existing_tags.update([t.strip() for t in tags.split(",") if t.strip()])
         return sorted(list(existing_tags))
@@ -137,29 +136,29 @@ class TaskTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = {}
 
         if task_type in [TYPE_SLIDING, TYPE_PREDICTIVE]:
-            default_interval = defaults.get(CONF_INTERVAL, 7)
+            default_interval = defaults.get(CONF_INTERVAL) or 7
             schema[vol.Optional(CONF_INTERVAL, default=default_interval)] = NumberSelector(
                 NumberSelectorConfig(min=1, mode="box", unit_of_measurement="days")
             )
         
         if task_type == TYPE_FIXED:
-            default_days = defaults.get(CONF_DAYS, [])
-            default_time = defaults.get(CONF_TIME, "00:00:00")
+            default_days = defaults.get(CONF_DAYS) or []
+            default_time = defaults.get(CONF_TIME) or "00:00:00"
             
             schema[vol.Optional(CONF_DAYS, default=default_days)] = SelectSelector(
                 SelectSelectorConfig(options=DAY_OPTIONS, multiple=True)
             )
             schema[vol.Optional(CONF_TIME, default=default_time)] = TimeSelector()
 
-        default_icon = defaults.get(CONF_ICON, "mdi:checkbox-marked-circle-outline")
+        default_icon = defaults.get(CONF_ICON) or "mdi:checkbox-marked-circle-outline"
         schema[vol.Optional(CONF_ICON, default=default_icon)] = IconSelector()
         
-        default_assignees = defaults.get(CONF_ASSIGNEES, [])
+        default_assignees = defaults.get(CONF_ASSIGNEES) or []
         schema[vol.Optional(CONF_ASSIGNEES, default=default_assignees)] = SelectSelector(
             SelectSelectorConfig(options=user_options, multiple=True)
         )
         
-        default_tags = defaults.get(CONF_TAGS, [])
+        default_tags = defaults.get(CONF_TAGS) or []
         schema[vol.Optional(CONF_TAGS, default=default_tags)] = SelectSelector(
             SelectSelectorConfig(
                 options=tag_options, 
@@ -176,7 +175,8 @@ class TaskTrackerOptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
-        self.config_entry = config_entry
+        # Use _config_entry to avoid conflict with HA's native read-only property
+        self._config_entry = config_entry
         self.task_info = {}
 
     async def async_step_init(
@@ -186,15 +186,16 @@ class TaskTrackerOptionsFlowHandler(config_entries.OptionsFlow):
         errors = {}
         
         # Load current values (prefer options, fall back to data)
-        current_config = {**self.config_entry.data, **self.config_entry.options}
+        current_config = {**self._config_entry.data, **self._config_entry.options}
 
         if user_input is not None:
             self.task_info = user_input
             return await self.async_step_details()
 
+        # The 'or' statements prevent 'None' values from breaking the schema.
         data_schema = vol.Schema({
-            vol.Required(CONF_NAME, default=current_config.get(CONF_NAME)): str,
-            vol.Required(CONF_TYPE, default=current_config.get(CONF_TYPE)): SelectSelector(
+            vol.Required(CONF_NAME, default=current_config.get(CONF_NAME) or "Task"): str,
+            vol.Required(CONF_TYPE, default=current_config.get(CONF_TYPE) or TYPE_SLIDING): SelectSelector(
                 SelectSelectorConfig(options=TYPE_OPTIONS)
             ),
         })
@@ -213,12 +214,6 @@ class TaskTrackerOptionsFlowHandler(config_entries.OptionsFlow):
             # Merge and Save
             final_data = {**self.task_info, **user_input}
             return self.async_create_entry(title="", data=final_data)
-
-        # Helpers (using methods from the main Flow class is tricky, 
-        # so we instantiate helper logic or duplicate it. 
-        # For simplicity in this file structure, we duplicate the helper calls or access them if static.
-        # Actually, python lets us use the ConfigFlow class methods if we make them static or standalone functions.
-        # BUT, simpler: just duplicate the lookups inside this method since we have self.hass
         
         # 1. Persons
         user_options = []
@@ -227,53 +222,52 @@ class TaskTrackerOptionsFlowHandler(config_entries.OptionsFlow):
             uid = person.attributes.get("user_id")
             if uid:
                 fname = person.attributes.get("friendly_name", person.entity_id)
-                user_options.append(SelectOptionDict(value=uid, label=fname))
+                user_options.append({"value": uid, "label": fname})
         if not user_options:
-             user_options = [SelectOptionDict(value="none", label="No Persons Found")]
+             user_options = [{"value": "none", "label": "No Persons Found"}]
 
         # 2. Tags
         existing_tags = set()
         for entry in self.hass.config_entries.async_entries(DOMAIN):
-            tags = entry.data.get(CONF_TAGS, [])
-            if not tags: tags = entry.options.get(CONF_TAGS, [])
-            if isinstance(tags, list): existing_tags.update(tags)
-            elif isinstance(tags, str) and tags.strip(): existing_tags.update([t.strip() for t in tags.split(",")])
+            tags = entry.data.get(CONF_TAGS) or []
+            if not tags: tags = entry.options.get(CONF_TAGS) or []
+            
+            if isinstance(tags, list): 
+                existing_tags.update([str(t) for t in tags if t])
+            elif isinstance(tags, str) and tags.strip(): 
+                existing_tags.update([t.strip() for t in tags.split(",") if t.strip()])
         tag_options = sorted(list(existing_tags))
 
         # Build Schema with Defaults
-        current_config = {**self.config_entry.data, **self.config_entry.options}
-        
-        # We need to manually construct the schema because we need to inject defaults
-        # We can't reuse _build_schema easily unless it's a standalone function.
-        # Let's just write it out:
+        current_config = {**self._config_entry.data, **self._config_entry.options}
         
         schema = {}
-        task_type = self.task_info[CONF_TYPE]
+        task_type = self.task_info.get(CONF_TYPE, TYPE_SLIDING)
         defaults = current_config
 
         if task_type in [TYPE_SLIDING, TYPE_PREDICTIVE]:
-            val = defaults.get(CONF_INTERVAL, 7)
+            val = defaults.get(CONF_INTERVAL) or 7
             schema[vol.Optional(CONF_INTERVAL, default=val)] = NumberSelector(
                 NumberSelectorConfig(min=1, mode="box", unit_of_measurement="days")
             )
         
         if task_type == TYPE_FIXED:
-            val_days = defaults.get(CONF_DAYS, [])
-            val_time = defaults.get(CONF_TIME, "00:00:00")
+            val_days = defaults.get(CONF_DAYS) or []
+            val_time = defaults.get(CONF_TIME) or "00:00:00"
             schema[vol.Optional(CONF_DAYS, default=val_days)] = SelectSelector(
                 SelectSelectorConfig(options=DAY_OPTIONS, multiple=True)
             )
             schema[vol.Optional(CONF_TIME, default=val_time)] = TimeSelector()
 
-        val_icon = defaults.get(CONF_ICON, "mdi:checkbox-marked-circle-outline")
+        val_icon = defaults.get(CONF_ICON) or "mdi:checkbox-marked-circle-outline"
         schema[vol.Optional(CONF_ICON, default=val_icon)] = IconSelector()
         
-        val_assignees = defaults.get(CONF_ASSIGNEES, [])
+        val_assignees = defaults.get(CONF_ASSIGNEES) or []
         schema[vol.Optional(CONF_ASSIGNEES, default=val_assignees)] = SelectSelector(
             SelectSelectorConfig(options=user_options, multiple=True)
         )
         
-        val_tags = defaults.get(CONF_TAGS, [])
+        val_tags = defaults.get(CONF_TAGS) or []
         schema[vol.Optional(CONF_TAGS, default=val_tags)] = SelectSelector(
             SelectSelectorConfig(
                 options=tag_options, 
