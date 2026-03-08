@@ -33,8 +33,6 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the sensor platform from UI Config Entry."""
-    # MERGE: Data (Initial) + Options (Edits)
-    # Options take priority.
     config = {**entry.data, **entry.options}
     
     tags_raw = config.get(CONF_TAGS)
@@ -100,6 +98,8 @@ class TaskSensor(SensorEntity, RestoreEntity):
         self._snoozed_until = None
         self._history = [] 
         self._snooze_unsub = None
+        # Track when the sensor was first created in this session
+        self._created_at = dt_util.now()
 
     @property
     def name(self):
@@ -139,6 +139,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
         """Restore state and resolve names."""
         await super().async_added_to_hass()
         
+        # Resolve assignee names
         self._assignee_names = []
         if self._assignee_ids:
             person_map = {}
@@ -158,6 +159,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
                     else:
                         self._assignee_names.append(user_id)
 
+        # Restore previous state
         last_state = await self.async_get_last_state()
         if last_state:
             if last_state.attributes.get("last_done"):
@@ -214,6 +216,15 @@ class TaskSensor(SensorEntity, RestoreEntity):
             now = dt_util.now()
             calculated_next = None
 
+            # CRITICAL CHANGE: If the task has never been done (newly created or history reset), 
+            # make it due immediately instead of calculating a future date.
+            if self._last_done is None:
+                self._next_due = self._created_at
+                self._state = "Overdue"
+                self._icon = "mdi:alert-circle"
+                self._days_remaining = 0
+                return
+
             if self._calc_type == TYPE_PREDICTIVE:
                 if len(self._history) >= 2:
                     deltas = []
@@ -224,21 +235,16 @@ class TaskSensor(SensorEntity, RestoreEntity):
                     if deltas:
                         avg_seconds = sum(d.total_seconds() for d in deltas) / len(deltas)
                         avg_interval = timedelta(seconds=avg_seconds)
-                        if self._last_done:
-                            calculated_next = self._last_done + avg_interval
+                        calculated_next = self._last_done + avg_interval
 
                 if not calculated_next and self._interval_days:
-                     if self._last_done:
-                         calculated_next = self._last_done + timedelta(days=self._interval_days)
-                     else:
-                         calculated_next = now + timedelta(days=self._interval_days)
+                    calculated_next = self._last_done + timedelta(days=self._interval_days)
 
             elif self._calc_type == TYPE_SLIDING:
-                if self._last_done and self._interval_days:
+                if self._interval_days:
                     calculated_next = self._last_done + timedelta(days=self._interval_days)
                 else:
-                    days = self._interval_days if self._interval_days else 1
-                    calculated_next = now + timedelta(days=days)
+                    calculated_next = self._last_done + timedelta(days=1)
 
             elif self._calc_type == TYPE_FIXED:
                 if self._schedule:
@@ -256,7 +262,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
                                 parsed_days.append(WEEKDAY_MAP[d])
                         byweekday = parsed_days
 
-                    start_point = self._last_done if self._last_done else now
+                    start_point = self._last_done
                     if start_point.tzinfo is None:
                         start_point = start_point.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
 
@@ -271,6 +277,8 @@ class TaskSensor(SensorEntity, RestoreEntity):
                             microsecond=0,
                             tzinfo=start_point.tzinfo
                         )
+                        # Ensure we aren't suggesting a time that is actually in the past 
+                        # relative to the completion event.
                         if calculated_next <= start_point:
                             next_occurrence = rule.after(start_point + timedelta(days=1))
                             calculated_next = next_occurrence.replace(
@@ -281,10 +289,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
                                 tzinfo=start_point.tzinfo
                             )
                 elif self._interval_days:
-                    if self._last_done:
-                         calculated_next = self._last_done + timedelta(days=self._interval_days)
-                    else:
-                         calculated_next = now + timedelta(days=self._interval_days)
+                    calculated_next = self._last_done + timedelta(days=self._interval_days)
 
             self._next_due = calculated_next
             
@@ -307,14 +312,12 @@ class TaskSensor(SensorEntity, RestoreEntity):
                 self._days_remaining = None
                 self._icon = "mdi:help-circle-outline"
 
-            # --- SNOOZE OVERRIDE LOGIC ---
-            # If the task is snoozed, override the display state but preserve the next_due calculation
             if self._snoozed_until:
                 if now < self._snoozed_until:
                     self._state = "Snoozed"
                     self._icon = "mdi:alarm-snooze"
                 else:
-                    self._snoozed_until = None # Snooze has expired, clear it naturally
+                    self._snoozed_until = None
 
         except Exception as e:
             _LOGGER.error(f"Error updating task {self._name}: {e}")
@@ -322,7 +325,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
             self._icon = "mdi:alert"
 
     async def mark_as_done(self, custom_date=None):
-        """Action: Mark the task as complete, optionally with a specific date."""
+        """Action: Mark the task as complete."""
         if custom_date:
             done_time = custom_date
             if done_time.tzinfo is None:
@@ -337,7 +340,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
         if self._history:
             self._last_done = self._history[-1]
             
-        self._snoozed_until = None # Clear snooze when completed
+        self._snoozed_until = None 
         self._update_state()
         self._schedule_snooze_expiration()
         self.async_write_ha_state()
@@ -347,6 +350,8 @@ class TaskSensor(SensorEntity, RestoreEntity):
         self._history = []
         self._last_done = None
         self._snoozed_until = None
+        # Set creation time to now so it becomes due immediately upon reset
+        self._created_at = dt_util.now()
         self._update_state()
         self._schedule_snooze_expiration()
         self.async_write_ha_state()
