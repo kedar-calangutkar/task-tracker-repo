@@ -216,71 +216,59 @@ class TaskSensor(SensorEntity, RestoreEntity):
             now = dt_util.now()
             calculated_next = None
 
-            # CRITICAL CHANGE: If the task has never been done (newly created or history reset), 
+            # If the task has never been done (newly created or history reset), 
             # make it due immediately instead of calculating a future date.
             if self._last_done is None:
                 self._next_due = self._created_at
                 self._state = "Overdue"
                 self._icon = "mdi:alert-circle"
                 self._days_remaining = 0
-                return
+            else:
+                if self._calc_type == TYPE_PREDICTIVE:
+                    if len(self._history) >= 2:
+                        deltas = []
+                        sorted_hist = sorted(self._history)
+                        for i in range(1, len(sorted_hist)):
+                            deltas.append(sorted_hist[i] - sorted_hist[i-1])
+                        
+                        if deltas:
+                            avg_seconds = sum(d.total_seconds() for d in deltas) / len(deltas)
+                            avg_interval = timedelta(seconds=avg_seconds)
+                            calculated_next = self._last_done + avg_interval
 
-            if self._calc_type == TYPE_PREDICTIVE:
-                if len(self._history) >= 2:
-                    deltas = []
-                    sorted_hist = sorted(self._history)
-                    for i in range(1, len(sorted_hist)):
-                        deltas.append(sorted_hist[i] - sorted_hist[i-1])
-                    
-                    if deltas:
-                        avg_seconds = sum(d.total_seconds() for d in deltas) / len(deltas)
-                        avg_interval = timedelta(seconds=avg_seconds)
-                        calculated_next = self._last_done + avg_interval
+                    if not calculated_next and self._interval_days:
+                        calculated_next = self._last_done + timedelta(days=self._interval_days)
 
-                if not calculated_next and self._interval_days:
-                    calculated_next = self._last_done + timedelta(days=self._interval_days)
+                elif self._calc_type == TYPE_SLIDING:
+                    if self._interval_days:
+                        calculated_next = self._last_done + timedelta(days=self._interval_days)
+                    else:
+                        calculated_next = self._last_done + timedelta(days=1)
 
-            elif self._calc_type == TYPE_SLIDING:
-                if self._interval_days:
-                    calculated_next = self._last_done + timedelta(days=self._interval_days)
-                else:
-                    calculated_next = self._last_done + timedelta(days=1)
+                elif self._calc_type == TYPE_FIXED:
+                    if self._schedule:
+                        target_time = self._schedule.get(CONF_TIME) or time(0,0)
+                        days_list = self._schedule.get(CONF_DAYS) or []
+                        
+                        freq = rrule.DAILY
+                        byweekday = None
+                        
+                        if days_list:
+                            freq = rrule.WEEKLY
+                            parsed_days = []
+                            for d in days_list:
+                                if d in WEEKDAY_MAP:
+                                    parsed_days.append(WEEKDAY_MAP[d])
+                            byweekday = parsed_days
 
-            elif self._calc_type == TYPE_FIXED:
-                if self._schedule:
-                    target_time = self._schedule.get(CONF_TIME) or time(0,0)
-                    days_list = self._schedule.get(CONF_DAYS) or []
-                    
-                    freq = rrule.DAILY
-                    byweekday = None
-                    
-                    if days_list:
-                        freq = rrule.WEEKLY
-                        parsed_days = []
-                        for d in days_list:
-                            if d in WEEKDAY_MAP:
-                                parsed_days.append(WEEKDAY_MAP[d])
-                        byweekday = parsed_days
+                        start_point = self._last_done
+                        if start_point.tzinfo is None:
+                            start_point = start_point.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
 
-                    start_point = self._last_done
-                    if start_point.tzinfo is None:
-                        start_point = start_point.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
-
-                    rule = rrule.rrule(freq, byweekday=byweekday, dtstart=start_point)
-                    next_occurrence = rule.after(start_point)
-                    
-                    if next_occurrence:
-                        calculated_next = next_occurrence.replace(
-                            hour=target_time.hour, 
-                            minute=target_time.minute, 
-                            second=0, 
-                            microsecond=0,
-                            tzinfo=start_point.tzinfo
-                        )
-                        # Ensure we aren't suggesting a time that is actually in the past 
-                        # relative to the completion event.
-                        if calculated_next <= start_point:
-                            next_occurrence = rule.after(start_point + timedelta(days=1))
+                        rule = rrule.rrule(freq, byweekday=byweekday, dtstart=start_point)
+                        next_occurrence = rule.after(start_point)
+                        
+                        if next_occurrence:
                             calculated_next = next_occurrence.replace(
                                 hour=target_time.hour, 
                                 minute=target_time.minute, 
@@ -288,30 +276,42 @@ class TaskSensor(SensorEntity, RestoreEntity):
                                 microsecond=0,
                                 tzinfo=start_point.tzinfo
                             )
-                elif self._interval_days:
-                    calculated_next = self._last_done + timedelta(days=self._interval_days)
+                            # Ensure we aren't suggesting a time that is actually in the past 
+                            # relative to the completion event.
+                            if calculated_next <= start_point:
+                                next_occurrence = rule.after(start_point + timedelta(days=1))
+                                calculated_next = next_occurrence.replace(
+                                    hour=target_time.hour, 
+                                    minute=target_time.minute, 
+                                    second=0, 
+                                    microsecond=0,
+                                    tzinfo=start_point.tzinfo
+                                )
+                    elif self._interval_days:
+                        calculated_next = self._last_done + timedelta(days=self._interval_days)
 
-            self._next_due = calculated_next
-            
-            if self._next_due:
-                delta = self._next_due - now
-                self._days_remaining = delta.days + (1 if delta.seconds > 0 else 0)
-                is_today = (self._next_due.date() == now.date())
+                self._next_due = calculated_next
+                
+                if self._next_due:
+                    delta = self._next_due - now
+                    self._days_remaining = delta.days + (1 if delta.seconds > 0 else 0)
+                    is_today = (self._next_due.date() == now.date())
 
-                if self._next_due < now:
-                    self._state = "Overdue"
-                    self._icon = "mdi:alert-circle"
-                elif is_today:
-                    self._state = "Due Today"
-                    self._icon = "mdi:calendar-today"
+                    if self._next_due < now:
+                        self._state = "Overdue"
+                        self._icon = "mdi:alert-circle"
+                    elif is_today:
+                        self._state = "Due Today"
+                        self._icon = "mdi:calendar-today"
+                    else:
+                        self._state = f"Due in {self._days_remaining} days"
+                        self._icon = self._icon_default
                 else:
-                    self._state = f"Due in {self._days_remaining} days"
-                    self._icon = self._icon_default
-            else:
-                self._state = "Need more history" if self._calc_type == TYPE_PREDICTIVE else "Unknown"
-                self._days_remaining = None
-                self._icon = "mdi:help-circle-outline"
+                    self._state = "Need more history" if self._calc_type == TYPE_PREDICTIVE else "Unknown"
+                    self._days_remaining = None
+                    self._icon = "mdi:help-circle-outline"
 
+            # Check snooze state last, which can override 'Overdue'/'Due Today'
             if self._snoozed_until:
                 if now < self._snoozed_until:
                     self._state = "Snoozed"
