@@ -27,6 +27,12 @@ WEEKDAY_MAP = {
     "sun": rrule.SU
 }
 
+DAY_NAMES = {
+    "mon": "Mondays", "tue": "Tuesdays", "wed": "Wednesdays",
+    "thu": "Thursdays", "fri": "Fridays", "sat": "Saturdays",
+    "sun": "Sundays"
+}
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -98,6 +104,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
         self._snoozed_until = None
         self._history = [] 
         self._snooze_unsub = None
+        self._due_unsub = None
         # Track when the sensor was first created in this session
         self._created_at = dt_util.now()
 
@@ -122,12 +129,17 @@ class TaskSensor(SensorEntity, RestoreEntity):
             "assignee_ids": self._assignee_ids,
         }
         if self._schedule:
-            schedule_attr = {}
-            if self._schedule.get(CONF_TIME):
-                schedule_attr["time"] = self._schedule[CONF_TIME].strftime("%H:%M")
-            if self._schedule.get(CONF_DAYS):
-                schedule_attr["days"] = self._schedule[CONF_DAYS]
-            attributes["schedule"] = schedule_attr
+            time_obj = self._schedule.get(CONF_TIME)
+            days = self._schedule.get(CONF_DAYS, [])
+            time_str = time_obj.strftime("%H:%M") if time_obj else "00:00"
+            
+            if not days:
+                schedule_str = f"Daily at {time_str}"
+            else:
+                day_names = [DAY_NAMES.get(d, d) for d in days]
+                schedule_str = f"Every {', '.join(day_names)} at {time_str}"
+            attributes["schedule"] = schedule_str
+            
         if self._last_done:
             attributes["last_done"] = self._last_done.isoformat()
         if self._next_due:
@@ -196,6 +208,27 @@ class TaskSensor(SensorEntity, RestoreEntity):
         if self._snooze_unsub:
             self._snooze_unsub()
             self._snooze_unsub = None
+        if self._due_unsub:
+            self._due_unsub()
+            self._due_unsub = None
+
+    def _schedule_due_update(self):
+        """Set a timer to update the sensor when it becomes due."""
+        if self._due_unsub:
+            self._due_unsub()
+            self._due_unsub = None
+
+        if self._next_due and self._next_due > dt_util.now():
+            self._due_unsub = async_track_point_in_time(
+                self.hass, self._async_due_reached, self._next_due
+            )
+
+    @callback
+    def _async_due_reached(self, now):
+        """Handle the exact moment a task becomes due."""
+        self._due_unsub = None
+        self._update_state()
+        self.async_write_ha_state()
 
     def _schedule_snooze_expiration(self):
         """Set a timer to wake up the sensor when snooze expires."""
@@ -310,7 +343,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
                         self._icon = self._icon_default
                     elif is_today:
                         self._state = "Due Today"
-                        self._icon = "mdi:calendar-today"
+                        self._icon = self._icon_default
                     else:
                         self._state = f"Due in {self._days_remaining} days"
                         self._icon = self._icon_default
@@ -328,6 +361,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
                     self._snoozed_until = None
             
             self._check_and_fire_due_event(old_state)
+            self._schedule_due_update()
 
         except Exception as e:
             _LOGGER.error(f"Error updating task {self._name}: {e}")
