@@ -8,7 +8,7 @@ Unlike standard calendar events, **Task Tracker** calculates due dates based on 
    * 🔄 **Sliding:** Resets the timer *after* completion, with an optional specific trigger time (e.g., "Change HVAC filter 90 days after I last did it, at 10:00 AM").
    * 🔮 **Predictive:** Learns from your habits. Averages your last 10 completions to predict the next due date.
  * **Rich Metadata:**
-   * **Assignees:** Link tasks to real Home Assistant Users/Persons.
+   * **Notify Target:** Point each task at any registered `notify.*` service (mobile app, group, etc.) — no Home Assistant user account required.
    * **Tags:** Organize with tags like health, chore, or garden.
  * **Audit History:** Keeps a persistent log of the last 10 completion timestamps.
  * **Snoozing:** Temporarily mute notifications or overdue status for a specific task without resetting its schedule.
@@ -59,7 +59,7 @@ graph TD
  * Step 2: Configure the details:
    * Interval/Schedule: Set days, times, or intervals based on the type.
    * Icon: Use the visual picker to find the perfect icon.
-   * Assignees: Select household members (linked to HA Person entities).
+   * Notify Target: Pick a `notify.*` service to target for this task (or type a custom one), used by your own automations to send reminders.
    * Tags: Select existing tags or type a new one to create it.
 
 ## Editing Tasks
@@ -125,26 +125,8 @@ features:
         entity_id: sensor.take_out_trash
 ```
 
- 2. "My Tasks" List (Auto-Entities)
-   Automatically shows tasks assigned to the current user. Requires Auto-Entities from HACS.
-<!-- end list -->
-```yaml
-type: custom:auto-entities
-card:
-  type: entities
-  title: 👤 My Tasks
-filter:
-  include:
-    - domain: sensor
-      integration: task_tracker
-      attributes:
-        assignees: "Me"  # Matches the Friendly Name of your user
-      options:
-        secondary_info: last-updated
-```
-
- 3. Automating Notifications using Snooze
-   Use templates in your automations to ignore snoozed tasks!
+ 2. Automating Notifications using the Task's Notify Target
+   Use templates in your automations to ignore snoozed tasks, and call the task's own `notify_entity` attribute so one automation covers every task.
 <!-- end list -->
 ```yaml
 alias: "Notify Overdue Tasks"
@@ -156,7 +138,7 @@ condition:
     value_template: >
       {{ states('sensor.take_out_trash') == 'Overdue' and state_attr('sensor.take_out_trash', 'snoozed_until') == none }}
 action:
-  - service: notify.notify
+  - service: "{{ state_attr('sensor.take_out_trash', 'notify_entity') }}"
     data:
       message: "Please take out the trash!"
 ```
