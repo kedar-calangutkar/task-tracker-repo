@@ -131,14 +131,20 @@ class TaskSensor(SensorEntity, RestoreEntity):
         if self._schedule:
             time_obj = self._schedule.get(CONF_TIME)
             days = self._schedule.get(CONF_DAYS, [])
-            time_str = time_obj.strftime("%H:%M") if time_obj else "00:00"
+            
+            time_part = ""
+            if time_obj and (time_obj.hour != 0 or time_obj.minute != 0):
+                time_part = f" at {time_obj.strftime('%H:%M')}"
             
             if not days:
-                schedule_str = f"Daily at {time_str}"
+                schedule_str = f"Daily{time_part}"
             else:
                 day_names = [DAY_NAMES.get(d, d) for d in days]
-                schedule_str = f"Every {', '.join(day_names)} at {time_str}"
+                schedule_str = f"Every {', '.join(day_names)}{time_part}"
             attributes["schedule"] = schedule_str
+            
+        elif self._calc_type == TYPE_PREDICTIVE and self._interval_days:
+            attributes["schedule"] = f"Every {self._interval_days} days"
             
         if self._last_done:
             attributes["last_done"] = self._last_done.isoformat()
