@@ -121,6 +121,13 @@ class TaskSensor(SensorEntity, RestoreEntity):
             "assignees": self._assignee_names,
             "assignee_ids": self._assignee_ids,
         }
+        if self._schedule:
+            schedule_attr = {}
+            if self._schedule.get(CONF_TIME):
+                schedule_attr["time"] = self._schedule[CONF_TIME].strftime("%H:%M")
+            if self._schedule.get(CONF_DAYS):
+                schedule_attr["days"] = self._schedule[CONF_DAYS]
+            attributes["schedule"] = schedule_attr
         if self._last_done:
             attributes["last_done"] = self._last_done.isoformat()
         if self._next_due:
@@ -212,6 +219,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
 
     def _update_state(self):
         """Calculate next due date."""
+        old_state = self._state
         try:
             now = dt_util.now()
             calculated_next = None
@@ -221,7 +229,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
             if self._last_done is None:
                 self._next_due = self._created_at
                 self._state = "Overdue"
-                self._icon = "mdi:alert-circle"
+                self._icon = self._icon_default
                 self._days_remaining = 0
             else:
                 if self._calc_type == TYPE_PREDICTIVE:
@@ -299,7 +307,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
 
                     if self._next_due < now:
                         self._state = "Overdue"
-                        self._icon = "mdi:alert-circle"
+                        self._icon = self._icon_default
                     elif is_today:
                         self._state = "Due Today"
                         self._icon = "mdi:calendar-today"
@@ -318,6 +326,8 @@ class TaskSensor(SensorEntity, RestoreEntity):
                     self._icon = "mdi:alarm-snooze"
                 else:
                     self._snoozed_until = None
+            
+            self._check_and_fire_due_event(old_state)
 
         except Exception as e:
             _LOGGER.error(f"Error updating task {self._name}: {e}")
@@ -373,3 +383,12 @@ class TaskSensor(SensorEntity, RestoreEntity):
         self._update_state()
         self._schedule_snooze_expiration()
         self.async_write_ha_state()
+
+    def _check_and_fire_due_event(self, old_state):
+        if self._state in ["Overdue", "Due Today"] and old_state not in ["Overdue", "Due Today"]:
+            self.hass.bus.fire(f"{DOMAIN}_task_due", {
+                "entity_id": self.entity_id,
+                "name": self._name,
+                "state": self._state,
+                "next_due": self._next_due.isoformat() if self._next_due else None
+            })
