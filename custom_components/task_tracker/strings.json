@@ -1,0 +1,47 @@
+{
+  "title": "Task Tracker",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Setup Task Tracker",
+        "data": {
+          "name": "Task Name",
+          "type": "Logic Type"
+        }
+      },
+      "details": {
+        "title": "Configure Task",
+        "data": {
+          "interval_days": "Interval (days)",
+          "days": "Days of week",
+          "time": "Time of day",
+          "icon": "Icon",
+          "assignees": "Assignees",
+          "tags": "Tags"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Edit Task",
+        "data": {
+          "name": "Task Name",
+          "type": "Logic Type"
+        }
+      },
+      "details": {
+        "title": "Edit Details",
+        "data": {
+          "interval_days": "Interval (days)",
+          "days": "Days of week",
+          "time": "Time of day",
+          "icon": "Icon",
+          "assignees": "Assignees",
+          "tags": "Tags"
+        }
+      }
+    }
+  }
+}
