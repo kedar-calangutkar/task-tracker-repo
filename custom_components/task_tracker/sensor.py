@@ -17,9 +17,11 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN, CONF_NAME, CONF_ICON, CONF_TYPE, CONF_INTERVAL,
-    CONF_SCHEDULE, CONF_DAYS, CONF_TIME, CONF_TAGS, CONF_ASSIGNEES,
+    CONF_SCHEDULE, CONF_DAYS, CONF_TIME, CONF_TAGS, CONF_NOTIFY_ENTITY,
     TYPE_FIXED, TYPE_SLIDING, TYPE_PREDICTIVE
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 WEEKDAY_MAP = {
     "mon": rrule.MO, "tue": rrule.TU, "wed": rrule.WE,
@@ -52,13 +54,8 @@ async def async_setup_entry(
     elif isinstance(tags_raw, str) and tags_raw.strip():
         tags = [t.strip() for t in tags_raw.split(",") if t.strip()]
     
-    assignees_raw = config.get(CONF_ASSIGNEES)
-    assignees = []
-    if isinstance(assignees_raw, list):
-        assignees = assignees_raw
-    elif isinstance(assignees_raw, str) and assignees_raw.strip():
-        assignees = [a.strip() for a in assignees_raw.split(",") if a.strip()]
-        
+    notify_entity = config.get(CONF_NOTIFY_ENTITY)
+
     time_str = config.get(CONF_TIME)
     time_obj = time(0,0)
     if time_str:
@@ -73,7 +70,7 @@ async def async_setup_entry(
         CONF_TYPE: config.get(CONF_TYPE),
         CONF_INTERVAL: config.get(CONF_INTERVAL),
         CONF_TAGS: tags,
-        CONF_ASSIGNEES: assignees,
+        CONF_NOTIFY_ENTITY: notify_entity,
         CONF_SCHEDULE: {
             CONF_TIME: time_obj,
             CONF_DAYS: config.get(CONF_DAYS, [])
@@ -125,9 +122,8 @@ class TaskSensor(SensorEntity, RestoreEntity):
         self._interval_days = task_config.get(CONF_INTERVAL)
         self._schedule = task_config.get(CONF_SCHEDULE)
         self._tags = task_config.get(CONF_TAGS, [])
-        self._assignee_ids = task_config.get(CONF_ASSIGNEES, [])
-        self._assignee_names = [] 
-        
+        self._notify_entity = task_config.get(CONF_NOTIFY_ENTITY)
+
         self._state = "Unknown"
         self._last_done = None
         self._next_due = None
@@ -166,8 +162,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
         attributes = {
             "type": self._calc_type,
             "tags": self._tags,
-            "assignees": self._assignee_names,
-            "assignee_ids": self._assignee_ids,
+            "notify_entity": self._notify_entity,
         }
         if self._calc_type == TYPE_FIXED and self._schedule:
             time_obj = self._schedule.get(CONF_TIME)
@@ -213,28 +208,8 @@ class TaskSensor(SensorEntity, RestoreEntity):
         return attributes
 
     async def async_added_to_hass(self):
-        """Restore state and resolve names."""
+        """Restore state."""
         await super().async_added_to_hass()
-        
-        # Resolve assignee names
-        self._assignee_names = []
-        if self._assignee_ids:
-            person_map = {}
-            persons = self.hass.states.async_all("person")
-            for person in persons:
-                uid = person.attributes.get("user_id")
-                if uid:
-                    person_map[uid] = person.attributes.get("friendly_name", person.name)
-
-            for user_id in self._assignee_ids:
-                if user_id in person_map:
-                    self._assignee_names.append(person_map[user_id])
-                else:
-                    user = self.hass.auth.get_user(user_id)
-                    if user:
-                        self._assignee_names.append(user.name)
-                    else:
-                        self._assignee_names.append(user_id)
 
         # Restore previous state
         last_state = await self.async_get_last_state()
@@ -315,18 +290,47 @@ class TaskSensor(SensorEntity, RestoreEntity):
             now = dt_util.now()
             calculated_next = None
 
-            # If the task has never been done (newly created or history reset), 
+            # If the task has never been done (newly created or history reset),
             # make it due based on the interval/schedule from now, not overdue.
             if self._last_done is None:
-                # Calculate based on config, or just set to 'now + interval'
-                if self._interval_days:
-                     self._next_due = now + timedelta(days=self._interval_days)
+                if self._calc_type == TYPE_FIXED and self._schedule:
+                    # Respect the fixed weekday/time schedule instead of a flat "+1 day".
+                    target_time = self._schedule.get(CONF_TIME) or time(0, 0)
+                    days_list = self._schedule.get(CONF_DAYS) or []
+
+                    freq = rrule.DAILY
+                    byweekday = None
+                    if days_list:
+                        freq = rrule.WEEKLY
+                        byweekday = [WEEKDAY_MAP[d] for d in days_list if d in WEEKDAY_MAP]
+
+                    rule = rrule.rrule(freq, byweekday=byweekday, dtstart=now)
+                    next_occurrence = rule.after(now, inc=True)
+                    candidate = next_occurrence.replace(
+                        hour=target_time.hour,
+                        minute=target_time.minute,
+                        second=0,
+                        microsecond=0
+                    )
+                    if candidate < now:
+                        next_occurrence = rule.after(now)
+                        candidate = next_occurrence.replace(
+                            hour=target_time.hour,
+                            minute=target_time.minute,
+                            second=0,
+                            microsecond=0
+                        )
+                    self._next_due = candidate
+                elif self._interval_days:
+                    self._next_due = now + timedelta(days=self._interval_days)
                 else:
-                     self._next_due = now + timedelta(days=1)
-                     
-                self._state = "Due in"
+                    self._next_due = now + timedelta(days=1)
+
+                delta = self._next_due - now
+                self._days_remaining = delta.days + (1 if delta.seconds > 0 else 0)
+                day_str = "day" if self._days_remaining == 1 else "days"
+                self._state = f"Due in {self._days_remaining} {day_str}"
                 self._icon = self._icon_default
-                self._days_remaining = self._interval_days or 1
             else:
                 if self._calc_type == TYPE_PREDICTIVE:
                     if len(self._history) >= 2:

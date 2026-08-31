@@ -16,7 +16,7 @@
           "days": "Days of week",
           "time": "Time of day",
           "icon": "Icon",
-          "assignees": "Assignees",
+          "notify_entity": "Notify Target",
           "tags": "Tags"
         }
       }
@@ -38,7 +38,7 @@
           "days": "Days of week",
           "time": "Time of day",
           "icon": "Icon",
-          "assignees": "Assignees",
+          "notify_entity": "Notify Target",
           "tags": "Tags"
         }
       }

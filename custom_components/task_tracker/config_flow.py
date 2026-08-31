@@ -21,7 +21,7 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     DOMAIN, CONF_NAME, CONF_TYPE, CONF_INTERVAL,
-    CONF_TIME, CONF_DAYS, CONF_TAGS, CONF_ASSIGNEES, CONF_ICON,
+    CONF_TIME, CONF_DAYS, CONF_TAGS, CONF_NOTIFY_ENTITY, CONF_ICON,
     TYPE_FIXED, TYPE_SLIDING, TYPE_PREDICTIVE
 )
 
@@ -92,29 +92,27 @@ class TaskTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         # Helpers
-        user_options = self._get_person_options(self.hass)
+        notify_options = self._get_notify_options(self.hass)
         tag_options = self._get_tag_options(self.hass)
 
-        schema = self._build_schema(self.hass, self.task_info[CONF_TYPE], user_options, tag_options)
+        schema = self._build_schema(self.hass, self.task_info[CONF_TYPE], notify_options, tag_options)
 
         return self.async_show_form(
             step_id="details", data_schema=vol.Schema(schema), errors=errors
         )
-    
+
     # --- HELPER FUNCTIONS TO SHARE LOGIC WITH OPTIONS FLOW ---
     @staticmethod
-    def _get_person_options(hass):
-        user_options = []
-        persons = hass.states.async_all("person")
-        for person in persons:
-            user_id = person.attributes.get("user_id")
-            if user_id:
-                friendly_name = person.attributes.get("friendly_name", person.entity_id)
-                user_options.append({"value": user_id, "label": friendly_name})
-                
-        if not user_options:
-            user_options = [{"value": "none", "label": "No Persons Found"}]
-        return user_options
+    def _get_notify_options(hass):
+        """Dynamically get all registered notify services (including YAML groups)."""
+        services = hass.services.async_services().get("notify", {})
+        options = [
+            {"value": f"notify.{service}", "label": f"notify.{service}"}
+            for service in services
+        ]
+        if not options:
+            options = [{"value": "notify.notify", "label": "notify.notify"}]
+        return options
 
     @staticmethod
     def _get_tag_options(hass):
@@ -130,7 +128,7 @@ class TaskTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return sorted(list(existing_tags))
 
     @staticmethod
-    def _build_schema(hass, task_type, user_options, tag_options, defaults=None):
+    def _build_schema(hass, task_type, notify_options, tag_options, defaults=None):
         if defaults is None:
             defaults = {}
             
@@ -155,9 +153,13 @@ class TaskTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         default_icon = defaults.get(CONF_ICON) or "mdi:checkbox-marked-circle-outline"
         schema[vol.Optional(CONF_ICON, default=default_icon)] = IconSelector()
         
-        default_assignees = defaults.get(CONF_ASSIGNEES) or []
-        schema[vol.Optional(CONF_ASSIGNEES, default=default_assignees)] = SelectSelector(
-            SelectSelectorConfig(options=user_options, multiple=True)
+        default_notify_entity = defaults.get(CONF_NOTIFY_ENTITY) or ""
+        schema[vol.Optional(CONF_NOTIFY_ENTITY, default=default_notify_entity)] = SelectSelector(
+            SelectSelectorConfig(
+                options=notify_options,
+                mode=SelectSelectorMode.DROPDOWN,
+                custom_value=True
+            )
         )
         
         default_tags = defaults.get(CONF_TAGS) or []
@@ -218,13 +220,13 @@ class TaskTrackerOptionsFlowHandler(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=final_data)
         
         # Helpers
-        user_options = TaskTrackerConfigFlow._get_person_options(self.hass)
+        notify_options = TaskTrackerConfigFlow._get_notify_options(self.hass)
         tag_options = TaskTrackerConfigFlow._get_tag_options(self.hass)
-        
+
         # Build Schema with Defaults
         current_config = {**self._config_entry.data, **self._config_entry.options}
-        
-        schema = TaskTrackerConfigFlow._build_schema(self.hass, self.task_info.get(CONF_TYPE, TYPE_SLIDING), user_options, tag_options, current_config)
+
+        schema = TaskTrackerConfigFlow._build_schema(self.hass, self.task_info.get(CONF_TYPE, TYPE_SLIDING), notify_options, tag_options, current_config)
 
         return self.async_show_form(
             step_id="details", data_schema=vol.Schema(schema), errors=errors
