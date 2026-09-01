@@ -323,6 +323,22 @@ class TaskSensor(SensorEntity, RestoreEntity):
                     self._next_due = candidate
                 elif self._interval_days:
                     self._next_due = now + timedelta(days=self._interval_days)
+
+                    # Same "midnight means no explicit override" rule as the
+                    # already-done TYPE_SLIDING branch, so a never-done task
+                    # with a real configured time isn't stuck inheriting
+                    # whatever time it happened to be created/viewed at.
+                    configured_time = None
+                    if self._schedule and self._schedule.get(CONF_TIME):
+                        configured_time = self._schedule.get(CONF_TIME)
+
+                    if configured_time and configured_time != time(0, 0):
+                        self._next_due = self._next_due.replace(
+                            hour=configured_time.hour,
+                            minute=configured_time.minute,
+                            second=0,
+                            microsecond=0
+                        )
                 else:
                     self._next_due = now + timedelta(days=1)
 
