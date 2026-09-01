@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from dateutil import rrule
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
 
 # Import your component
@@ -167,6 +168,34 @@ async def test_history_records_due_datetime(mock_hass, mock_now):
         assert len(history) == 1
         assert history[0]["done"] == mock_now.isoformat()
         assert history[0]["due"] == due_before_completion.isoformat()
+
+async def test_mark_as_done_rejects_unparseable_last_done(mock_hass, mock_now):
+    """An unparseable last_done string must be rejected up front instead of
+    landing in history as None, which would break sorting and attribute
+    serialization on every later update (including a valid completion)."""
+    config = {
+        CONF_NAME: "Bad Input Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_ICON: DEFAULT_ICON
+    }
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        sensor._update_state()
+
+        with pytest.raises(ServiceValidationError):
+            await sensor.mark_as_done(last_done="not-a-real-datetime")
+
+        # The bad call must not have mutated history/last_done at all.
+        assert sensor._history == []
+        assert sensor._last_done is None
+
+        # A subsequent valid completion still works normally.
+        await sensor.mark_as_done()
+        assert sensor._last_done == mock_now
+        assert sensor.extra_state_attributes["history"][0]["done"] == mock_now.isoformat()
 
 def test_parse_history_handles_legacy_and_current_formats():
     """_parse_history() upgrades old flat-string history (no due info)
