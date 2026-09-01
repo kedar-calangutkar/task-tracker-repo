@@ -494,9 +494,17 @@ class TaskSensor(SensorEntity, RestoreEntity):
         if self._history:
             self._last_done = self._history[-1]
             
-        self._snoozed_until = None 
+        self._snoozed_until = None
         self._update_state()
         self._schedule_snooze_expiration()
+
+        self.hass.bus.fire(f"{DOMAIN}_task_completed", {
+            "entity_id": self.entity_id,
+            "name": self._name,
+            "last_done": done_time.isoformat(),
+            "next_due": self._next_due.isoformat() if self._next_due else None
+        })
+
         self.async_write_ha_state()
 
     async def reset_history(self):

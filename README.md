@@ -106,6 +106,31 @@ target:
   entity_id: sensor.cut_nails
 ```
 
+## 🔔 Events
+Task Tracker fires bus events you can trigger automations from, in addition to polling entity state/attributes.
+
+### task_tracker_task_completed
+Fires whenever a task is marked done (via `complete_task` or the "Mark Done" button), including backdated completions. Useful for clearing a notification you sent when the task became due.
+```yaml
+alias: "Clear Trash Reminder Notification"
+trigger:
+  - platform: event
+    event_type: task_tracker_task_completed
+    event_data:
+      entity_id: sensor.take_out_trash
+action:
+  - service: notify.mobile_app_kedars_phone
+    data:
+      message: "clear_notification"
+      data:
+        tag: "take_out_trash_reminder"
+```
+Event data: `entity_id`, `name`, `last_done` (ISO timestamp), `next_due` (ISO timestamp or `null`).
+
+### task_tracker_task_due
+Fires the moment a task transitions into `Overdue` or `Due Today` (not on every state check — only on that transition).
+Event data: `entity_id`, `name`, `state`, `next_due` (ISO timestamp or `null`).
+
 ## 📱 Dashboard Examples
  1. The "Mark Done" Button (Tile Card)
    The cleanest way to interact with tasks.
