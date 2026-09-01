@@ -203,9 +203,36 @@ class TaskSensor(SensorEntity, RestoreEntity):
             attributes["snoozed_until"] = self._snoozed_until.isoformat()
             
         if self._history:
-            attributes["history"] = [d.isoformat() for d in self._history]
-            
+            attributes["history"] = [
+                {
+                    "done": entry["done"].isoformat(),
+                    "due": entry["due"].isoformat() if entry.get("due") else None,
+                }
+                for entry in self._history
+            ]
+
         return attributes
+
+    @staticmethod
+    def _parse_history(raw_history):
+        """Parse a restored history attribute into {"done", "due"} entries.
+
+        Handles both the current format (a list of {"done", "due"} dicts)
+        and the legacy format (a flat list of ISO completion timestamps,
+        with no due info) so existing tasks' history survives an upgrade.
+        """
+        parsed_history = []
+        for item in raw_history:
+            if isinstance(item, dict):
+                done = dt_util.parse_datetime(item.get("done"))
+                due_raw = item.get("due")
+                due = dt_util.parse_datetime(due_raw) if due_raw else None
+            else:
+                done = dt_util.parse_datetime(item)
+                due = None
+            if done:
+                parsed_history.append({"done": done, "due": due})
+        return parsed_history
 
     async def async_added_to_hass(self):
         """Restore state."""
@@ -228,8 +255,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
 
             if last_state.attributes.get("history"):
                 try:
-                    raw_history = last_state.attributes["history"]
-                    self._history = [dt_util.parse_datetime(d) for d in raw_history if dt_util.parse_datetime(d)]
+                    self._history = self._parse_history(last_state.attributes["history"])
                 except Exception:
                     pass
         
@@ -351,7 +377,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
                 if self._calc_type == TYPE_PREDICTIVE:
                     if len(self._history) >= 2:
                         deltas = []
-                        sorted_hist = sorted(self._history)
+                        sorted_hist = sorted(entry["done"] for entry in self._history)
                         for i in range(1, len(sorted_hist)):
                             deltas.append(sorted_hist[i] - sorted_hist[i-1])
                         
@@ -486,14 +512,18 @@ class TaskSensor(SensorEntity, RestoreEntity):
                 done_time = done_time.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
         else:
             done_time = dt_util.now()
-            
-        self._history.append(done_time)
-        self._history.sort()
+
+        # Capture what was due before _update_state() recalculates it for
+        # the next cycle, so history remembers what this completion satisfied.
+        due_at_completion = self._next_due
+
+        self._history.append({"done": done_time, "due": due_at_completion})
+        self._history.sort(key=lambda entry: entry["done"])
         self._history = self._history[-10:]
-        
+
         if self._history:
-            self._last_done = self._history[-1]
-            
+            self._last_done = self._history[-1]["done"]
+
         self._snoozed_until = None
         self._update_state()
         self._schedule_snooze_expiration()
@@ -502,6 +532,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
             "entity_id": self.entity_id,
             "name": self._name,
             "last_done": done_time.isoformat(),
+            "due": due_at_completion.isoformat() if due_at_completion else None,
             "next_due": self._next_due.isoformat() if self._next_due else None
         })
 

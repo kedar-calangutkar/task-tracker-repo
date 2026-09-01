@@ -128,6 +128,10 @@ async def test_mark_as_done_fires_completed_event(mock_hass, mock_now):
     with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
         sensor = TaskSensor(config)
         _attach_to_hass(sensor, mock_hass, entity_id="sensor.event_task")
+        # Never done before, so it was due 7 days from creation/first update.
+        sensor._update_state()
+        due_before_completion = sensor._next_due
+
         await sensor.mark_as_done()
 
         mock_hass.bus.fire.assert_called_once_with(
@@ -136,9 +140,55 @@ async def test_mark_as_done_fires_completed_event(mock_hass, mock_now):
                 "entity_id": "sensor.event_task",
                 "name": "Event Task",
                 "last_done": mock_now.isoformat(),
+                "due": due_before_completion.isoformat(),
                 "next_due": sensor._next_due.isoformat(),
             },
         )
+
+async def test_history_records_due_datetime(mock_hass, mock_now):
+    """mark_as_done() records the due datetime this completion satisfied,
+    so dashboards can show it alongside the completion date/time."""
+    config = {
+        CONF_NAME: "History Due Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_ICON: DEFAULT_ICON
+    }
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        sensor._update_state()
+        due_before_completion = sensor._next_due
+
+        await sensor.mark_as_done()
+
+        history = sensor.extra_state_attributes["history"]
+        assert len(history) == 1
+        assert history[0]["done"] == mock_now.isoformat()
+        assert history[0]["due"] == due_before_completion.isoformat()
+
+def test_parse_history_handles_legacy_and_current_formats():
+    """_parse_history() upgrades old flat-string history (no due info)
+    alongside the current {"done", "due"} dict format, so existing tasks'
+    history isn't lost after this integration update."""
+    legacy_done = datetime(2024, 1, 1, 8, 0, 0, tzinfo=dt_util.UTC)
+    current_done = datetime(2024, 1, 8, 8, 0, 0, tzinfo=dt_util.UTC)
+    current_due = datetime(2024, 1, 8, 0, 0, 0, tzinfo=dt_util.UTC)
+
+    raw_history = [
+        legacy_done.isoformat(),
+        {"done": current_done.isoformat(), "due": current_due.isoformat()},
+        {"done": current_done.isoformat(), "due": None},
+    ]
+
+    parsed = TaskSensor._parse_history(raw_history)
+
+    assert parsed == [
+        {"done": legacy_done, "due": None},
+        {"done": current_done, "due": current_due},
+        {"done": current_done, "due": None},
+    ]
 
 # --- TEST FIXED SCHEDULE LOGIC ---
 async def test_fixed_schedule_logic(mock_hass, mock_now):
@@ -199,7 +249,7 @@ async def test_predictive_logic(mock_hass, mock_now):
         day_1 = mock_now - timedelta(days=20)
         day_2 = mock_now - timedelta(days=10)
         
-        sensor._history = [day_1, day_2]
+        sensor._history = [{"done": day_1, "due": None}, {"done": day_2, "due": None}]
         sensor._last_done = day_2 # Most recent
         
         sensor._update_state()
