@@ -97,6 +97,25 @@ async def test_sliding_task_with_explicit_time(mock_hass, mock_now):
         assert sensor._last_done == mock_now
         assert sensor.extra_state_attributes["next_due"] == expected_next.isoformat()
 
+async def test_sliding_task_never_done_with_explicit_time(mock_hass, mock_now):
+    """A never-done sliding task with a real configured time applies it too,
+    not just the already-done path."""
+    config = {
+        CONF_NAME: "Fresh Sliding Task With Time",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_SCHEDULE: {CONF_TIME: datetime.strptime("18:00", "%H:%M").time()},
+        CONF_ICON: DEFAULT_ICON
+    }
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        sensor._update_state()
+
+        expected_due = (mock_now + timedelta(days=7)).replace(hour=18, minute=0, second=0, microsecond=0)
+        assert sensor._next_due == expected_due
+
 # --- TEST FIXED SCHEDULE LOGIC ---
 async def test_fixed_schedule_logic(mock_hass, mock_now):
     """Test that fixed tasks stick to specific days (e.g. Wednesday)."""
