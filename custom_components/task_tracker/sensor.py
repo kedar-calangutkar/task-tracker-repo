@@ -349,20 +349,28 @@ class TaskSensor(SensorEntity, RestoreEntity):
 
                 elif self._calc_type == TYPE_SLIDING:
                     if self._interval_days:
-                        # Base next due date
+                        # Base next due date, preserving the time-of-day the
+                        # task was actually completed at.
                         next_date = self._last_done + timedelta(days=self._interval_days)
-                        
-                        # Apply configured time if available
-                        target_time = time(0,0)
+
+                        # Only override the time if the user explicitly chose
+                        # one. The config flow defaults CONF_TIME to midnight
+                        # when left untouched, so treat midnight as "no
+                        # override" rather than silently snapping every
+                        # sliding task's due time to 00:00.
+                        configured_time = None
                         if self._schedule and self._schedule.get(CONF_TIME):
-                            target_time = self._schedule.get(CONF_TIME)
-                            
-                        calculated_next = next_date.replace(
-                            hour=target_time.hour, 
-                            minute=target_time.minute, 
-                            second=0, 
-                            microsecond=0
-                        )
+                            configured_time = self._schedule.get(CONF_TIME)
+
+                        if configured_time and configured_time != time(0, 0):
+                            calculated_next = next_date.replace(
+                                hour=configured_time.hour,
+                                minute=configured_time.minute,
+                                second=0,
+                                microsecond=0
+                            )
+                        else:
+                            calculated_next = next_date
                     else:
                         calculated_next = self._last_done + timedelta(days=1)
 

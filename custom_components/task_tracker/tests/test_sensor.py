@@ -71,11 +71,29 @@ async def test_sliding_task_logic(mock_hass, mock_now):
         # 2. Mark as done TODAY
         await sensor.mark_as_done()
 
-        # Logic: Last Done (Today) + 7 Days. Sliding tasks always carry a
-        # CONF_TIME from the config flow (defaulting to midnight when the
-        # user hasn't set one), so the time-of-day is normalized rather
-        # than inherited from when the task happened to be completed.
-        expected_next = (mock_now + timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        # Logic: Last Done (Today) + 7 Days, preserving the time-of-day it
+        # was actually completed at (no explicit CONF_TIME was configured,
+        # so the config flow's midnight default is treated as "no override").
+        expected_next = mock_now + timedelta(days=7)
+        assert sensor._last_done == mock_now
+        assert sensor.extra_state_attributes["next_due"] == expected_next.isoformat()
+
+async def test_sliding_task_with_explicit_time(mock_hass, mock_now):
+    """A sliding task with a real (non-midnight) configured time still applies it."""
+    config = {
+        CONF_NAME: "Sliding Task With Time",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_SCHEDULE: {CONF_TIME: datetime.strptime("18:00", "%H:%M").time()},
+        CONF_ICON: DEFAULT_ICON
+    }
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        await sensor.mark_as_done()
+
+        expected_next = (mock_now + timedelta(days=7)).replace(hour=18, minute=0, second=0, microsecond=0)
         assert sensor._last_done == mock_now
         assert sensor.extra_state_attributes["next_due"] == expected_next.isoformat()
 
