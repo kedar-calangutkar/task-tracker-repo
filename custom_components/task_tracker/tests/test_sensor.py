@@ -339,3 +339,201 @@ async def test_snooze_task_logic(mock_hass, mock_now):
         await sensor.unsnooze_task()
         assert "Due in 7 days" in sensor.native_value
         assert "snoozed_until" not in sensor.extra_state_attributes
+
+# --- TEST SCHEDULE ATTRIBUTE EDGE CASES ---
+async def test_fixed_schedule_attribute_daily_when_no_days_configured(mock_hass, mock_now):
+    """A Fixed task with no specific days configured is "Daily", not tied
+    to any particular weekday list."""
+    config = {
+        CONF_NAME: "Daily Fixed Task",
+        CONF_TYPE: TYPE_FIXED,
+        CONF_SCHEDULE: {
+            CONF_DAYS: [],
+            CONF_TIME: datetime.strptime("09:00", "%H:%M").time()
+        },
+        CONF_ICON: DEFAULT_ICON
+    }
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        sensor._update_state()
+        assert sensor.extra_state_attributes["schedule"] == "Daily at 09:00 AM"
+
+async def test_unknown_task_type_schedule_attribute_is_none(mock_hass):
+    """A task with an unrecognized type (e.g. from a future/rolled-back
+    config version) reports "None" instead of crashing on attribute access."""
+    config = {
+        CONF_NAME: "Weird Type Task",
+        CONF_TYPE: "not_a_real_type",
+        CONF_ICON: DEFAULT_ICON
+    }
+    sensor = TaskSensor(config)
+    assert sensor.extra_state_attributes["schedule"] == "None"
+
+# --- TEST NEVER-DONE FALLBACK/CORRECTION PATHS ---
+async def test_fixed_never_done_corrects_when_todays_slot_already_passed(mock_hass, mock_now):
+    """A never-done Fixed task whose scheduled time today has already
+    passed skips to next week's occurrence instead of reporting a
+    same-day due time that's actually already in the past."""
+    # mock_now is Monday, Jan 1st 2024, 12:00:00 - after the 9 AM slot.
+    config = {
+        CONF_NAME: "Passed Slot Task",
+        CONF_TYPE: TYPE_FIXED,
+        CONF_SCHEDULE: {
+            CONF_DAYS: ["mon"],
+            CONF_TIME: datetime.strptime("09:00", "%H:%M").time()
+        },
+        CONF_ICON: DEFAULT_ICON
+    }
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        sensor._update_state()
+
+        expected = (mock_now + timedelta(days=7)).replace(hour=9, minute=0, second=0, microsecond=0)
+        assert sensor._next_due == expected
+
+async def test_never_done_fallback_to_one_day_when_no_schedule_or_interval(mock_hass, mock_now):
+    """A never-done task with neither a fixed schedule nor an interval
+    configured still gets a sane default (due tomorrow) instead of None."""
+    config = {
+        CONF_NAME: "No Schedule Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_ICON: DEFAULT_ICON
+    }
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        sensor._update_state()
+        assert sensor._next_due == mock_now + timedelta(days=1)
+
+# --- TEST DONE-BRANCH FALLBACK PATHS ---
+async def test_predictive_falls_back_to_interval_with_insufficient_history(mock_hass, mock_now):
+    """A Predictive task with fewer than 2 history entries can't compute
+    an average, so it falls back to the configured interval_days."""
+    config = {
+        CONF_NAME: "New Predictive Task",
+        CONF_TYPE: TYPE_PREDICTIVE,
+        CONF_INTERVAL: 10,
+        CONF_ICON: DEFAULT_ICON
+    }
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        sensor.hass = mock_hass
+        sensor._last_done = mock_now - timedelta(days=2)
+        sensor._history = [{"done": sensor._last_done, "due": None}]
+
+        sensor._update_state()
+        assert sensor._next_due == sensor._last_done + timedelta(days=10)
+
+async def test_sliding_done_fallback_to_one_day_when_no_interval(mock_hass, mock_now):
+    """A completed Sliding task with no interval_days configured still
+    gets a sane default (due tomorrow) instead of crashing."""
+    config = {
+        CONF_NAME: "No Interval Sliding Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_ICON: DEFAULT_ICON
+    }
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        sensor._last_done = mock_now
+        sensor._update_state()
+        assert sensor._next_due == mock_now + timedelta(days=1)
+
+async def test_fixed_done_normalizes_naive_last_done(mock_hass, mock_now):
+    """A restored/legacy last_done value without tzinfo is normalized
+    to the default timezone instead of crashing the rrule calculation."""
+    config = {
+        CONF_NAME: "Naive Last Done Fixed Task",
+        CONF_TYPE: TYPE_FIXED,
+        CONF_SCHEDULE: {
+            CONF_DAYS: ["wed"],
+            CONF_TIME: datetime.strptime("09:00", "%H:%M").time()
+        },
+        CONF_ICON: DEFAULT_ICON
+    }
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        sensor._last_done = datetime(2024, 1, 1, 8, 0, 0)  # naive, no tzinfo
+        sensor._update_state()
+
+        assert sensor._state != "Error"
+        assert sensor._next_due.tzinfo is not None
+
+# --- TEST "UNKNOWN"/"NEED MORE HISTORY" FALLBACK STATES ---
+async def test_predictive_needs_more_history_state(mock_hass, mock_now):
+    """A Predictive task with insufficient history AND no configured
+    interval_days can't compute a next_due at all, so it reports
+    "Need more history" rather than a bogus date."""
+    config = {
+        CONF_NAME: "Sparse Predictive Task",
+        CONF_TYPE: TYPE_PREDICTIVE,
+        CONF_ICON: DEFAULT_ICON
+    }
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        sensor._last_done = mock_now - timedelta(days=1)
+        sensor._history = [{"done": sensor._last_done, "due": None}]
+        sensor._update_state()
+
+        assert sensor._state == "Need more history"
+        assert sensor._next_due is None
+
+async def test_fixed_done_unknown_state_when_no_schedule_or_interval(mock_hass, mock_now):
+    """A completed Fixed task with neither a schedule nor interval_days
+    configured can't compute a next_due, so it reports "Unknown"."""
+    config = {
+        CONF_NAME: "Broken Fixed Task",
+        CONF_TYPE: TYPE_FIXED,
+        CONF_ICON: DEFAULT_ICON
+    }
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        sensor._last_done = mock_now - timedelta(days=1)
+        sensor._update_state()
+
+        assert sensor._state == "Unknown"
+        assert sensor._next_due is None
+
+# --- TEST ERROR STATE ---
+async def test_update_state_sets_error_on_exception(mock_hass, mock_now):
+    """An unexpected exception while calculating state must be caught and
+    surfaced as an Error state/icon rather than crashing the update."""
+    config = {
+        CONF_NAME: "Error Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_ICON: DEFAULT_ICON
+    }
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        sensor._last_done = "not-a-datetime"  # corrupt internal state to force a crash
+        sensor._update_state()
+
+        assert sensor._state == "Error"
+        assert sensor._icon == "mdi:alert"
+
+# --- TEST mark_as_done WITH A DATETIME OBJECT (NOT A STRING) ---
+async def test_mark_as_done_accepts_datetime_object_and_normalizes_naive_tz(mock_hass, mock_now):
+    """mark_as_done() accepts a real datetime object directly (as called
+    from Python code, not just a service's string argument), and
+    normalizes a naive one to the default timezone."""
+    config = {
+        CONF_NAME: "Datetime Arg Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_ICON: DEFAULT_ICON
+    }
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        naive_dt = datetime(2024, 1, 1, 9, 0, 0)  # no tzinfo, and not a string
+
+        await sensor.mark_as_done(last_done=naive_dt)
+
+        assert sensor._last_done == naive_dt.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
