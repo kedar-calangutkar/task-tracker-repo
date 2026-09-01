@@ -116,6 +116,30 @@ async def test_sliding_task_never_done_with_explicit_time(mock_hass, mock_now):
         expected_due = (mock_now + timedelta(days=7)).replace(hour=18, minute=0, second=0, microsecond=0)
         assert sensor._next_due == expected_due
 
+async def test_mark_as_done_fires_completed_event(mock_hass, mock_now):
+    """mark_as_done() fires a task_tracker_task_completed event with the entity_id."""
+    config = {
+        CONF_NAME: "Event Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_ICON: DEFAULT_ICON
+    }
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass, entity_id="sensor.event_task")
+        await sensor.mark_as_done()
+
+        mock_hass.bus.fire.assert_called_once_with(
+            "task_tracker_task_completed",
+            {
+                "entity_id": "sensor.event_task",
+                "name": "Event Task",
+                "last_done": mock_now.isoformat(),
+                "next_due": sensor._next_due.isoformat(),
+            },
+        )
+
 # --- TEST FIXED SCHEDULE LOGIC ---
 async def test_fixed_schedule_logic(mock_hass, mock_now):
     """Test that fixed tasks stick to specific days (e.g. Wednesday)."""
