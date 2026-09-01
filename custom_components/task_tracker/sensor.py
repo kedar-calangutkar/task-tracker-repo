@@ -9,6 +9,7 @@ from dateutil import rrule
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -507,8 +508,16 @@ class TaskSensor(SensorEntity, RestoreEntity):
                 done_time = dt_util.parse_datetime(last_done)
             else:
                 done_time = last_done
-                
-            if done_time and done_time.tzinfo is None:
+
+            if done_time is None:
+                # Reject unparseable input here rather than letting a None
+                # slip into history, where it would break sorting and
+                # attribute serialization on every future update.
+                raise ServiceValidationError(
+                    f"Could not parse last_done value '{last_done}' as a datetime"
+                )
+
+            if done_time.tzinfo is None:
                 done_time = done_time.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
         else:
             done_time = dt_util.now()
