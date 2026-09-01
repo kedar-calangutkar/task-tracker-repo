@@ -21,14 +21,14 @@ graph TD
     Start([Task Completed]) --> CheckType{Check Type}
     
     CheckType -->|Fixed| Fixed[Get Scheduled Day/Time]
-    Fixed --> F_Calc[Find NEXT occurrence strictly after Now]
+    Fixed --> F_Calc[Find NEXT occurrence strictly after Date Done]
     F_Calc --> Save
     
     CheckType -->|Sliding| Sliding[Get Interval X Days + Time]
     Sliding --> S_Calc[Next Due = Date Done + X Days at Time]
     S_Calc --> Save
     
-    CheckType -->|Predictive| Pred{History > 2?}
+    CheckType -->|Predictive| Pred{History >= 2?}
     Pred -->|No| P_Guess[Use Initial Guess Interval]
     Pred -->|Yes| P_Avg[Calculate Average Interval of History]
     P_Avg --> P_Calc[Next Due = Date Done + Average]
@@ -125,7 +125,7 @@ action:
       data:
         tag: "take_out_trash_reminder"
 ```
-Event data: `entity_id`, `name`, `last_done` (ISO timestamp), `next_due` (ISO timestamp or `null`).
+Event data: `entity_id`, `name`, `last_done` (ISO timestamp), `due` (ISO timestamp or `null` — the due date/time this completion satisfied), `next_due` (ISO timestamp or `null`).
 
 ### task_tracker_task_due
 Fires the moment a task transitions into `Overdue` or `Due Today` (not on every state check — only on that transition).
