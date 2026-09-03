@@ -31,6 +31,21 @@ WEEKDAY_MAP = {
     "sun": rrule.SU
 }
 
+def _as_aware(value):
+    """Normalize a parsed datetime to be timezone-aware.
+
+    Restored/legacy data (an older schema, or an attribute value edited
+    by hand) can round-trip without a UTC offset. Every comparison and
+    arithmetic operation against dt_util.now() elsewhere in this module
+    assumes an aware datetime; mixing naive and aware raises TypeError,
+    which _update_state()'s broad except then turns into a silent
+    "Error" state instead of a working sensor.
+    """
+    if value is not None and value.tzinfo is None:
+        value = value.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    return value
+
+
 DAY_NAMES = {
     "mon": "Mondays", "tue": "Tuesdays", "wed": "Wednesdays",
     "thu": "Thursdays", "fri": "Fridays", "sat": "Saturdays",
@@ -226,11 +241,11 @@ class TaskSensor(SensorEntity, RestoreEntity):
         parsed_history = []
         for item in raw_history:
             if isinstance(item, dict):
-                done = dt_util.parse_datetime(item.get("done"))
+                done = _as_aware(dt_util.parse_datetime(item.get("done")))
                 due_raw = item.get("due")
-                due = dt_util.parse_datetime(due_raw) if due_raw else None
+                due = _as_aware(dt_util.parse_datetime(due_raw)) if due_raw else None
             else:
-                done = dt_util.parse_datetime(item)
+                done = _as_aware(dt_util.parse_datetime(item))
                 due = None
             if done:
                 parsed_history.append({"done": done, "due": due})
@@ -255,13 +270,13 @@ class TaskSensor(SensorEntity, RestoreEntity):
 
             if last_state.attributes.get("last_done"):
                 try:
-                    self._last_done = dt_util.parse_datetime(last_state.attributes["last_done"])
+                    self._last_done = _as_aware(dt_util.parse_datetime(last_state.attributes["last_done"]))
                 except Exception:
                     pass
 
             if last_state.attributes.get("snoozed_until"):
                 try:
-                    self._snoozed_until = dt_util.parse_datetime(last_state.attributes["snoozed_until"])
+                    self._snoozed_until = _as_aware(dt_util.parse_datetime(last_state.attributes["snoozed_until"]))
                 except Exception:
                     pass
 

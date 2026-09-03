@@ -20,7 +20,7 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.task_tracker.const import (
     DOMAIN, CONF_NAME, CONF_TYPE, CONF_INTERVAL, CONF_ICON, CONF_TIME,
-    CONF_DAYS, CONF_TAGS, TYPE_SLIDING, TYPE_FIXED
+    CONF_DAYS, CONF_TAGS, TYPE_SLIDING, TYPE_FIXED, TYPE_PREDICTIVE
 )
 
 from pytest_homeassistant_custom_component.common import (
@@ -179,6 +179,71 @@ async def test_restore_history_and_last_done_across_restart(hass: HomeAssistant)
     assert state.attributes["history"] == [{"done": past_done, "due": past_due}]
 
 
+async def test_restore_naive_last_done_does_not_crash_sliding_task(hass: HomeAssistant):
+    """A restored last_done without a UTC offset (older schema, or a
+    hand-edited attribute) must not crash the sliding-task calculation.
+
+    Regression test: only the fixed-type branch defended against a
+    naive last_done. Reaching _update_state() with one left the sliding
+    and predictive branches subtracting a naive last_done/next_due from
+    dt_util.now() (aware), raising TypeError - swallowed by
+    _update_state()'s broad except into a silent "Error" state instead
+    of a working sensor."""
+    entity_id = "sensor.naive_restore_sliding_task"
+    naive_last_done = "2024-01-01T08:00:00"  # no UTC offset
+
+    mock_restore_cache(hass, [
+        State(entity_id, "Due in 4 days", {"last_done": naive_last_done})
+    ])
+
+    entry = MockConfigEntry(domain=DOMAIN, data=_sliding_entry_data("Naive Restore Sliding Task"))
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state != "Error"
+    assert dt_util.parse_datetime(state.attributes["next_due"]).tzinfo is not None
+
+
+async def test_restore_naive_history_does_not_crash_predictive_task(hass: HomeAssistant):
+    """Restored history "done" timestamps without a UTC offset must not
+    crash the predictive average-interval calculation, which subtracts
+    them from each other and the result from dt_util.now()."""
+    entity_id = "sensor.naive_restore_predictive_task"
+    naive_done_1 = "2024-01-01T08:00:00"
+    naive_done_2 = "2024-01-08T08:00:00"
+
+    mock_restore_cache(hass, [
+        State(entity_id, "Need more history", {
+            "last_done": naive_done_2,
+            "history": [
+                {"done": naive_done_1, "due": None},
+                {"done": naive_done_2, "due": None},
+            ],
+        })
+    ])
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_NAME: "Naive Restore Predictive Task",
+            CONF_TYPE: TYPE_PREDICTIVE,
+            CONF_INTERVAL: 7,
+            CONF_ICON: "mdi:checkbox-marked-circle-outline",
+        },
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state != "Error"
+    assert dt_util.parse_datetime(state.attributes["next_due"]).tzinfo is not None
+
+
 async def test_restore_legacy_flat_history_format(hass: HomeAssistant):
     """A restored history attribute in the legacy flat-string format (no
     due info) is upgraded to the current {"done", "due"} dict format."""
@@ -216,6 +281,27 @@ async def test_restore_snoozed_until(hass: HomeAssistant):
     state = hass.states.get(entity_id)
     assert state.state == "Snoozed"
     assert state.attributes["snoozed_until"] == future_snooze
+
+
+async def test_restore_naive_snoozed_until_does_not_crash(hass: HomeAssistant):
+    """A restored snoozed_until without a UTC offset must not crash
+    _update_state()'s "now < snoozed_until" comparison against
+    dt_util.now() (aware) - it should still land on "Snoozed"."""
+    entity_id = "sensor.naive_restore_snooze_task"
+    naive_future_snooze = (dt_util.now() + timedelta(days=1)).replace(tzinfo=None).isoformat()
+
+    mock_restore_cache(hass, [
+        State(entity_id, "Snoozed", {"snoozed_until": naive_future_snooze})
+    ])
+
+    entry = MockConfigEntry(domain=DOMAIN, data=_sliding_entry_data("Naive Restore Snooze Task"))
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state == "Snoozed"
 
 
 async def test_snooze_expiration_timer_clears_snooze(hass: HomeAssistant):
