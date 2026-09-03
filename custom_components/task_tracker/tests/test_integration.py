@@ -291,6 +291,47 @@ async def test_due_timer_transitions_to_overdue_and_fires_event(hass: HomeAssist
     assert events[0].data["state"] == "Overdue"
 
 
+async def test_restore_state_enables_due_event_right_after_restart(hass: HomeAssistant):
+    """If the restored (pre-restart) state was genuinely not-due, and the
+    freshly computed state on the very first post-restart _update_state()
+    call is Overdue/Due Today, task_tracker_task_due must still fire -
+    even though this is the first update since startup.
+
+    Regression test: self._state used to always start as "Unknown" after
+    a restart or config reload, regardless of what the entity's state
+    actually was before. The initial-load guard in
+    _check_and_fire_due_event() then swallowed this transition any time a
+    task's due moment had arrived during downtime (or a config edit
+    reloaded the entity right around its due time) - not just on a cold
+    start with stale, already-overdue tasks, which is the case that
+    guard is actually meant to protect against."""
+    fixed_now = datetime(2024, 1, 2, 0, 0, 0, tzinfo=dt_util.UTC)
+    entity_id = "sensor.restart_due_task"
+    past_done = (fixed_now - timedelta(days=2)).isoformat()
+
+    # Restored state reflects what the task looked like before downtime:
+    # not yet due.
+    mock_restore_cache(hass, [
+        State(entity_id, "Due in 1 day", {"last_done": past_done})
+    ])
+
+    with patch("homeassistant.util.dt.utcnow", return_value=dt_util.as_utc(fixed_now)), \
+         patch("homeassistant.util.dt.now", return_value=fixed_now):
+        events = async_capture_events(hass, "task_tracker_task_due")
+        entry = MockConfigEntry(
+            domain=DOMAIN, data=_sliding_entry_data("Restart Due Task", interval=1)
+        )
+        entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    state = hass.states.get(entity_id)
+    assert state.state == "Overdue"
+    assert len(events) == 1
+    assert events[0].data["entity_id"] == entity_id
+    assert events[0].data["state"] == "Overdue"
+
+
 async def test_unload_cancels_pending_timers(hass: HomeAssistant):
     """async_will_remove_from_hass() unsubscribes both the due and snooze
     timers on unload, so no callbacks fire against a torn-down entity."""

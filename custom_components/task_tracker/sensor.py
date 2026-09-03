@@ -8,6 +8,7 @@ from dateutil import rrule
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_platform
@@ -242,6 +243,16 @@ class TaskSensor(SensorEntity, RestoreEntity):
         # Restore previous state
         last_state = await self.async_get_last_state()
         if last_state:
+            # Restore the prior state string itself (not just the
+            # attributes) so the first _update_state() call after a
+            # config reload or HA restart can still detect a genuine
+            # transition into Overdue/Due Today against what the task
+            # actually was before, instead of always starting from
+            # "Unknown" and having that one transition suppressed by
+            # the initial-load guard in _check_and_fire_due_event().
+            if last_state.state not in (None, STATE_UNKNOWN, STATE_UNAVAILABLE):
+                self._state = last_state.state
+
             if last_state.attributes.get("last_done"):
                 try:
                     self._last_done = dt_util.parse_datetime(last_state.attributes["last_done"])
