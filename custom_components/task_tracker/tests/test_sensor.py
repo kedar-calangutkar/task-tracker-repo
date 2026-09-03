@@ -515,6 +515,45 @@ async def test_never_done_fixed_task_due_moment_does_not_roll_to_next_cycle(mock
     assert sensor._next_due == due_at  # must not have jumped to tomorrow
     assert sensor.native_value == "Overdue"
 
+async def test_never_done_sliding_task_next_due_does_not_chase_now(mock_hass, mock_now):
+    """A never-done Sliding/Predictive task's fallback next_due is
+    "now + interval_days" - without memoization this would recompute on
+    every _update_state() call using whatever "now" happens to be at
+    that moment, so next_due would perpetually sit interval_days ahead
+    of "now" and the task could never actually become due, no matter
+    how much time passed. _next_due must stay fixed once established,
+    same as the Fixed-type case."""
+    config = {
+        CONF_NAME: "Never Done Sliding Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_ICON: DEFAULT_ICON
+    }
+    sensor = TaskSensor(config)
+    _attach_to_hass(sensor, mock_hass, entity_id="sensor.never_done_sliding_task")
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor._update_state()
+    due_at = sensor._next_due
+    assert due_at == mock_now + timedelta(days=7)
+
+    # Much later - well past the originally computed due date.
+    much_later = mock_now + timedelta(days=30)
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=much_later):
+        sensor._update_state()
+
+    assert sensor._next_due == due_at  # must not have chased "now" forward
+    assert sensor.native_value == "Overdue"
+    mock_hass.bus.fire.assert_called_once_with(
+        "task_tracker_task_due",
+        {
+            "entity_id": "sensor.never_done_sliding_task",
+            "name": "Never Done Sliding Task",
+            "state": "Overdue",
+            "next_due": due_at.isoformat(),
+        },
+    )
+
 async def test_never_done_fallback_to_one_day_when_no_schedule_or_interval(mock_hass, mock_now):
     """A never-done task with neither a fixed schedule nor an interval
     configured still gets a sane default (due tomorrow) instead of None."""
