@@ -146,6 +146,45 @@ async def test_mark_as_done_fires_completed_event(mock_hass, mock_now):
             },
         )
 
+async def test_due_today_to_overdue_transition_also_fires_event(mock_hass, mock_now):
+    """"Due Today" -> "Overdue" is a real, distinct transition (a task
+    that was merely due today has now actually been missed) and must
+    fire task_tracker_task_due too, not just the very first not-due ->
+    due crossing. Regression test: the old fire condition only checked
+    whether the *old* state was entirely outside the due bucket, so once
+    a task was caught as "Due Today" it could never fire again later the
+    same cycle when it actually became "Overdue"."""
+    config = {
+        CONF_NAME: "Slipping Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 1,
+        CONF_SCHEDULE: {CONF_TIME: datetime.strptime("18:00", "%H:%M").time()},
+        CONF_ICON: DEFAULT_ICON
+    }
+    sensor = TaskSensor(config)
+    _attach_to_hass(sensor, mock_hass, entity_id="sensor.slipping_task")
+    sensor._last_done = mock_now - timedelta(days=1)  # next_due = today 18:00, stable
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor._update_state()
+    assert sensor.native_value == "Due Today"
+    mock_hass.bus.fire.assert_not_called()  # first-ever calculation, from "Unknown"
+
+    later_same_day = mock_now.replace(hour=19, minute=0, second=0, microsecond=0)
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=later_same_day):
+        sensor._update_state()
+
+    assert sensor.native_value == "Overdue"
+    mock_hass.bus.fire.assert_called_once_with(
+        "task_tracker_task_due",
+        {
+            "entity_id": "sensor.slipping_task",
+            "name": "Slipping Task",
+            "state": "Overdue",
+            "next_due": sensor._next_due.isoformat(),
+        },
+    )
+
 async def test_history_records_due_datetime(mock_hass, mock_now):
     """mark_as_done() records the due datetime this completion satisfied,
     so dashboards can show it alongside the completion date/time."""

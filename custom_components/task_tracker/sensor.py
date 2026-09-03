@@ -611,7 +611,14 @@ class TaskSensor(SensorEntity, RestoreEntity):
         if old_state == "Unknown":
             return
             
-        if self._state in ["Overdue", "Due Today"] and old_state not in ["Overdue", "Due Today"]:
+        # Fire on any real change into a due state - not just from a
+        # fully not-due state. "Due Today" -> "Overdue" is just as much
+        # a transition worth notifying about as "Due in 1 day" -> "Due
+        # Today"; the old check only fired on the very first crossing
+        # into the due bucket and stayed silent for every subsequent
+        # one, so a task caught as "Due Today" earlier in the day would
+        # never get a follow-up alert once it actually became overdue.
+        if self._state in ["Overdue", "Due Today"] and self._state != old_state:
             self.hass.bus.fire(f"{DOMAIN}_task_due", {
                 "entity_id": self.entity_id,
                 "name": self._name,
