@@ -393,6 +393,44 @@ async def test_fixed_never_done_corrects_when_todays_slot_already_passed(mock_ha
         expected = (mock_now + timedelta(days=7)).replace(hour=9, minute=0, second=0, microsecond=0)
         assert sensor._next_due == expected
 
+async def test_never_done_fixed_task_reaches_due_today_and_fires_event(mock_hass, mock_now):
+    """A never-done Fixed task must still classify as "Due Today"/"Overdue"
+    (not just "Due in N days") once its scheduled slot is today, and must
+    fire task_tracker_task_due on that transition like an already-done task
+    does. Regression test: the never-done branch used to always format
+    "Due in N days" regardless of how close next_due actually was, so the
+    event never fired for tasks that had never been marked done."""
+    config = {
+        CONF_NAME: "Fresh Fixed Task",
+        CONF_TYPE: TYPE_FIXED,
+        CONF_SCHEDULE: {CONF_TIME: datetime.strptime("18:00", "%H:%M").time()},
+        CONF_ICON: DEFAULT_ICON
+    }
+    sensor = TaskSensor(config)
+    _attach_to_hass(sensor, mock_hass, entity_id="sensor.fresh_fixed_task")
+
+    # Day before, after the slot already passed for that day -> due tomorrow.
+    yesterday_evening = mock_now - timedelta(days=1, hours=-8)  # Dec 31, 20:00
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=yesterday_evening):
+        sensor._update_state()
+    assert "Due in 1 day" in sensor.native_value
+    mock_hass.bus.fire.assert_not_called()  # first-ever calculation, from "Unknown"
+
+    # Same day, before the 18:00 slot -> should now read "Due Today" and fire.
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor._update_state()
+
+    assert sensor.native_value == "Due Today"
+    mock_hass.bus.fire.assert_called_once_with(
+        "task_tracker_task_due",
+        {
+            "entity_id": "sensor.fresh_fixed_task",
+            "name": "Fresh Fixed Task",
+            "state": "Due Today",
+            "next_due": sensor._next_due.isoformat(),
+        },
+    )
+
 async def test_never_done_fallback_to_one_day_when_no_schedule_or_interval(mock_hass, mock_now):
     """A never-done task with neither a fixed schedule nor an interval
     configured still gets a sane default (due tomorrow) instead of None."""
