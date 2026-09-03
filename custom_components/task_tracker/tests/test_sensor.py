@@ -432,13 +432,16 @@ async def test_fixed_never_done_corrects_when_todays_slot_already_passed(mock_ha
         expected = (mock_now + timedelta(days=7)).replace(hour=9, minute=0, second=0, microsecond=0)
         assert sensor._next_due == expected
 
-async def test_never_done_fixed_task_reaches_due_today_and_fires_event(mock_hass, mock_now):
+async def test_never_done_fixed_task_reaches_due_today_then_fires_on_overdue(mock_hass, mock_now):
     """A never-done Fixed task must still classify as "Due Today"/"Overdue"
-    (not just "Due in N days") once its scheduled slot is today, and must
-    fire task_tracker_task_due on that transition like an already-done task
-    does. Regression test: the never-done branch used to always format
-    "Due in N days" regardless of how close next_due actually was, so the
-    event never fired for tasks that had never been marked done."""
+    (not just "Due in N days") once its scheduled slot is today. Reaching
+    "Due Today" alone must NOT fire task_tracker_task_due - only an actual
+    "Overdue" transition is a missed-task alert - but the task must still
+    correctly reach "Overdue" (and fire then) once the slot passes.
+    Regression test: the never-done branch used to always format
+    "Due in N days" regardless of how close next_due actually was, so a
+    never-done task could never reach "Overdue" (and thus never fire) at
+    all."""
     config = {
         CONF_NAME: "Fresh Fixed Task",
         CONF_TYPE: TYPE_FIXED,
@@ -455,17 +458,24 @@ async def test_never_done_fixed_task_reaches_due_today_and_fires_event(mock_hass
     assert "Due in 1 day" in sensor.native_value
     mock_hass.bus.fire.assert_not_called()  # first-ever calculation, from "Unknown"
 
-    # Same day, before the 18:00 slot -> should now read "Due Today" and fire.
+    # Same day, before the 18:00 slot -> should now read "Due Today", silently.
     with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
         sensor._update_state()
-
     assert sensor.native_value == "Due Today"
+    mock_hass.bus.fire.assert_not_called()  # Due Today is a heads-up, not an alert
+
+    # After the 18:00 slot -> now Overdue, and that's what fires.
+    past_due = mock_now.replace(hour=19, minute=0, second=0, microsecond=0)
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=past_due):
+        sensor._update_state()
+
+    assert sensor.native_value == "Overdue"
     mock_hass.bus.fire.assert_called_once_with(
         "task_tracker_task_due",
         {
             "entity_id": "sensor.fresh_fixed_task",
             "name": "Fresh Fixed Task",
-            "state": "Due Today",
+            "state": "Overdue",
             "next_due": sensor._next_due.isoformat(),
         },
     )
