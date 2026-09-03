@@ -320,7 +320,16 @@ class TaskSensor(SensorEntity, RestoreEntity):
             # If the task has never been done (newly created or history reset),
             # make it due based on the interval/schedule from now, not overdue.
             if self._last_done is None:
-                if self._calc_type == TYPE_FIXED and self._schedule:
+                # Only establish _next_due once. Re-deriving it from "now" on
+                # every call (e.g. the point-in-time timer firing exactly at
+                # the previously computed due moment) would anchor the rrule
+                # at a dtstart that's already at-or-past the target time, so
+                # "next occurrence after now" always rolls forward to the
+                # *next* cycle instead of recognizing the one that just
+                # arrived - the due moment would be skipped every time.
+                if self._next_due is not None:
+                    pass
+                elif self._calc_type == TYPE_FIXED and self._schedule:
                     # Respect the fixed weekday/time schedule instead of a flat "+1 day".
                     target_time = self._schedule.get(CONF_TIME) or time(0, 0)
                     days_list = self._schedule.get(CONF_DAYS) or []
