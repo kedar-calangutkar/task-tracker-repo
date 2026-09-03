@@ -431,6 +431,41 @@ async def test_never_done_fixed_task_reaches_due_today_and_fires_event(mock_hass
         },
     )
 
+async def test_never_done_fixed_task_due_moment_does_not_roll_to_next_cycle(mock_hass, mock_now):
+    """The scheduled point-in-time timer calls _update_state() again right
+    at (or a hair after) the moment a never-done task becomes due. Before
+    this fix, the never-done branch re-derived _next_due from "now" on
+    every call; since "now" at that instant is already at-or-past today's
+    slot, dtstart=now made the rrule skip straight to *tomorrow's*
+    occurrence, so the task silently reverted from "Due Today" back to
+    "Due in 1 day" and could never reach "Overdue" - a never-completed
+    recurring task could never fire task_tracker_task_due at all, no
+    matter how many timer cycles passed. _next_due must stay fixed once
+    established until the task is actually completed."""
+    config = {
+        CONF_NAME: "Midnight Fixed Task",
+        CONF_TYPE: TYPE_FIXED,
+        CONF_SCHEDULE: {CONF_TIME: datetime.strptime("00:01", "%H:%M").time()},
+        CONF_ICON: DEFAULT_ICON
+    }
+    sensor = TaskSensor(config)
+    _attach_to_hass(sensor, mock_hass, entity_id="sensor.midnight_fixed_task")
+
+    # Config reloaded/created shortly before the due slot -> due later today.
+    just_before_due = mock_now.replace(hour=0, minute=0, second=20, microsecond=0)
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=just_before_due):
+        sensor._update_state()
+    due_at = sensor._next_due
+    assert sensor.native_value == "Due Today"
+
+    # The point-in-time timer fires right at (a hair past) that due moment.
+    just_after_due = due_at + timedelta(microseconds=1)
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=just_after_due):
+        sensor._update_state()
+
+    assert sensor._next_due == due_at  # must not have jumped to tomorrow
+    assert sensor.native_value == "Overdue"
+
 async def test_never_done_fallback_to_one_day_when_no_schedule_or_interval(mock_hass, mock_now):
     """A never-done task with neither a fixed schedule nor an interval
     configured still gets a sane default (due tomorrow) instead of None."""
