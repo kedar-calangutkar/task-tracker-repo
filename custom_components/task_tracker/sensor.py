@@ -371,8 +371,15 @@ class TaskSensor(SensorEntity, RestoreEntity):
 
                 delta = self._next_due - now
                 self._days_remaining = delta.days + (1 if delta.seconds > 0 else 0)
-                day_str = "day" if self._days_remaining == 1 else "days"
-                self._state = f"Due in {self._days_remaining} {day_str}"
+                is_today = (self._next_due.date() == now.date())
+
+                if self._next_due < now:
+                    self._state = "Overdue"
+                elif is_today:
+                    self._state = "Due Today"
+                else:
+                    day_str = "day" if self._days_remaining == 1 else "days"
+                    self._state = f"Due in {self._days_remaining} {day_str}"
                 self._icon = self._icon_default
             else:
                 if self._calc_type == TYPE_PREDICTIVE:
