@@ -79,6 +79,33 @@ async def test_sliding_task_logic(mock_hass, mock_now):
         assert sensor._last_done == mock_now
         assert sensor.extra_state_attributes["next_due"] == expected_next.isoformat()
 
+async def test_days_remaining_uses_calendar_date_not_elapsed_hours(mock_hass, mock_now):
+    """days_remaining (and the "Due in N days" text derived from it) must
+    reflect the calendar-date gap to next_due, not the raw elapsed time.
+    Before this fix it was `delta.days + (1 if delta.seconds else 0)`,
+    which over-counts by one whenever next_due's time-of-day is later
+    than now's: a task due tomorrow at 08:00, checked today at 07:00, is
+    only one calendar day away, but the elapsed time is just over 24
+    hours, so the old code reported "Due in 2 days" instead of "Due in 1
+    day"."""
+    config = {
+        CONF_NAME: "Sliding Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 2,
+        CONF_ICON: DEFAULT_ICON
+    }
+    sensor = TaskSensor(config)
+    _attach_to_hass(sensor, mock_hass)
+    sensor._last_done = mock_now - timedelta(days=1, hours=4)  # Dec 31, 08:00 UTC
+    # next_due = Jan 2, 08:00 UTC (last_done + 2 days)
+
+    almost_a_day_before_due = mock_now.replace(hour=7, minute=0, second=0, microsecond=0)
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=almost_a_day_before_due):
+        sensor._update_state()
+
+    assert "Due in 1 day" in sensor.native_value
+    assert sensor._days_remaining == 1
+
 async def test_sliding_task_with_explicit_time(mock_hass, mock_now):
     """A sliding task with a real (non-midnight) configured time still applies it."""
     config = {
