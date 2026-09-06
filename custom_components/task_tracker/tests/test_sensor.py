@@ -235,6 +235,79 @@ async def test_history_records_due_datetime(mock_hass, mock_now):
         assert history[0]["done"] == mock_now.isoformat()
         assert history[0]["due"] == due_before_completion.isoformat()
 
+async def test_undo_last_completion_reverts_to_prior_entry(mock_hass, mock_now):
+    """undo_last_completion() removes only the most recent history entry
+    and recomputes last_done/next_due as if that completion never happened,
+    leaving earlier completions intact."""
+    config = {
+        CONF_NAME: "Undo Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_ICON: DEFAULT_ICON
+    }
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        await sensor.mark_as_done()
+
+    second_done = mock_now + timedelta(days=3)
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=second_done):
+        await sensor.mark_as_done()
+
+    assert len(sensor.extra_state_attributes["history"]) == 2
+    assert sensor._last_done == second_done
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=second_done):
+        await sensor.undo_last_completion()
+
+    history = sensor.extra_state_attributes["history"]
+    assert len(history) == 1
+    assert history[0]["done"] == mock_now.isoformat()
+    assert sensor._last_done == mock_now
+    # Sliding logic: next_due recomputed from the (now reinstated) first completion.
+    assert sensor._next_due == mock_now + timedelta(days=7)
+
+async def test_undo_last_completion_to_empty_history(mock_hass, mock_now):
+    """Undoing the only completion reverts the task to its never-done state."""
+    config = {
+        CONF_NAME: "Fully Undone Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_ICON: DEFAULT_ICON
+    }
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        _attach_to_hass(sensor, mock_hass)
+        await sensor.mark_as_done()
+        assert "history" in sensor.extra_state_attributes
+
+        await sensor.undo_last_completion()
+
+    assert sensor._last_done is None
+    assert "history" not in sensor.extra_state_attributes
+    assert "last_done" not in sensor.extra_state_attributes
+
+async def test_undo_last_completion_is_noop_without_history(mock_hass, mock_now):
+    """Calling undo_last_completion on a task with no history does nothing,
+    matching the analogous "nothing to undo" no-op in medicine_tracker."""
+    config = {
+        CONF_NAME: "Never Done Task",
+        CONF_TYPE: TYPE_SLIDING,
+        CONF_INTERVAL: 7,
+        CONF_ICON: DEFAULT_ICON
+    }
+    sensor = TaskSensor(config)
+    _attach_to_hass(sensor, mock_hass)
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        await sensor.undo_last_completion()
+
+    assert sensor._history == []
+    assert sensor._last_done is None
+    mock_hass.states.async_set.assert_not_called()
+
 async def test_mark_as_done_rejects_unparseable_last_done(mock_hass, mock_now):
     """An unparseable last_done string must be rejected up front instead of
     landing in history as None, which would break sorting and attribute
