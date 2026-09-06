@@ -355,6 +355,33 @@ async def test_predictive_logic(mock_hass, mock_now):
         assert sensor._next_due == expected_due
         assert sensor.native_value == "Due Today"
 
+
+async def test_predictive_schedule_attribute_reflects_computed_average(mock_hass, mock_now):
+    """The 'schedule' attribute should show the interval actually driving
+    next_due (the history-derived average), not the originally configured
+    guess, once enough history exists to compute one."""
+    config = {
+        CONF_NAME: "Predictive Task",
+        CONF_TYPE: TYPE_PREDICTIVE,
+        CONF_INTERVAL: 10,  # Initial guess, should be superseded by history.
+        CONF_ICON: DEFAULT_ICON
+    }
+
+    with patch("custom_components.task_tracker.sensor.dt_util.now", return_value=mock_now):
+        sensor = TaskSensor(config)
+        sensor.hass = mock_hass
+
+        # Actual completions are 4 days apart, not the configured 10.
+        day_1 = mock_now - timedelta(days=8)
+        day_2 = mock_now - timedelta(days=4)
+
+        sensor._history = [{"done": day_1, "due": None}, {"done": day_2, "due": None}]
+        sensor._last_done = day_2
+
+        sensor._update_state()
+
+        assert sensor.extra_state_attributes["schedule"] == "Predictive (Average 4 days)"
+
 # --- TEST METADATA ---
 async def test_metadata_attributes(mock_hass):
     """Ensure tags and notify_entity are passed to attributes."""

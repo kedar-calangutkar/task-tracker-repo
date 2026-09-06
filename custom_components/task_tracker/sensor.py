@@ -137,6 +137,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
         self._icon = self._icon_default
         
         self._interval_days = task_config.get(CONF_INTERVAL)
+        self._avg_interval_days = None
         self._schedule = task_config.get(CONF_SCHEDULE)
         self._tags = task_config.get(CONF_TAGS, [])
         self._notify_entity = task_config.get(CONF_NOTIFY_ENTITY)
@@ -196,8 +197,9 @@ class TaskSensor(SensorEntity, RestoreEntity):
                 schedule_str = f"Every {', '.join(day_names)}{time_part}"
             attributes["schedule"] = schedule_str
             
-        elif self._calc_type == TYPE_PREDICTIVE and self._interval_days:
-            attributes["schedule"] = f"Predictive (Average {int(self._interval_days)} days)"
+        elif self._calc_type == TYPE_PREDICTIVE and (self._avg_interval_days or self._interval_days):
+            display_interval = self._avg_interval_days if self._avg_interval_days is not None else self._interval_days
+            attributes["schedule"] = f"Predictive (Average {int(round(display_interval))} days)"
             
         elif self._calc_type == TYPE_SLIDING:
             time_part = ""
@@ -422,11 +424,15 @@ class TaskSensor(SensorEntity, RestoreEntity):
                         sorted_hist = sorted(entry["done"] for entry in self._history)
                         for i in range(1, len(sorted_hist)):
                             deltas.append(sorted_hist[i] - sorted_hist[i-1])
-                        
+
                         if deltas:
                             avg_seconds = sum(d.total_seconds() for d in deltas) / len(deltas)
                             avg_interval = timedelta(seconds=avg_seconds)
                             calculated_next = self._last_done + avg_interval
+                            # Keep the displayed "schedule" attribute in sync with
+                            # the interval actually driving next_due, instead of
+                            # leaving it frozen at the originally configured value.
+                            self._avg_interval_days = avg_seconds / 86400
 
                     if not calculated_next and self._interval_days:
                         calculated_next = self._last_done + timedelta(days=self._interval_days)
@@ -591,6 +597,7 @@ class TaskSensor(SensorEntity, RestoreEntity):
         """Action: Clear history and reset state."""
         self._history = []
         self._last_done = None
+        self._avg_interval_days = None
         self._snoozed_until = None
         # Set creation time to now so it becomes due immediately upon reset
         self._created_at = dt_util.now()
