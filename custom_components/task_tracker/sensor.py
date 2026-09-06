@@ -112,6 +112,11 @@ async def async_setup_entry(
         "reset_history",
     )
     platform.async_register_entity_service(
+        "undo_last_completion",
+        {},
+        "undo_last_completion",
+    )
+    platform.async_register_entity_service(
         "snooze_task",
         {
             vol.Required("until"): str,
@@ -591,6 +596,16 @@ class TaskSensor(SensorEntity, RestoreEntity):
             "next_due": self._next_due.isoformat() if self._next_due else None
         })
 
+        self.async_write_ha_state()
+
+    async def undo_last_completion(self):
+        """Action: Remove only the most recently logged completion, leaving earlier history intact."""
+        if not self._history:
+            return
+
+        self._history.pop()
+        self._last_done = self._history[-1]["done"] if self._history else None
+        self._update_state()
         self.async_write_ha_state()
 
     async def reset_history(self):

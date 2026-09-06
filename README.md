@@ -106,6 +106,14 @@ target:
   entity_id: sensor.cut_nails
 ```
 
+### undo_last_completion
+Removes only the most recently logged completion, leaving earlier history intact. A no-op if there's no history.
+```yaml
+action: task_tracker.undo_last_completion
+target:
+  entity_id: sensor.cut_nails
+```
+
 ## 🔔 Events
 Task Tracker fires bus events you can trigger automations from, in addition to polling entity state/attributes.
 
