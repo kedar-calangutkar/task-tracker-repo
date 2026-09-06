@@ -91,6 +91,31 @@ async def test_reset_history_service(hass: HomeAssistant):
     assert "history" not in hass.states.get(entity_id).attributes
 
 
+async def test_undo_last_completion_service(hass: HomeAssistant):
+    """task_tracker.undo_last_completion removes only the latest completion
+    via the real service path, leaving earlier history intact."""
+    entry = MockConfigEntry(domain=DOMAIN, data=_sliding_entry_data("Undo Service Task"))
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    entity_id = "sensor.undo_service_task"
+    await hass.services.async_call(DOMAIN, "complete_task", {"entity_id": entity_id}, blocking=True)
+    await hass.services.async_call(DOMAIN, "complete_task", {"entity_id": entity_id}, blocking=True)
+    assert len(hass.states.get(entity_id).attributes["history"]) == 2
+
+    await hass.services.async_call(DOMAIN, "undo_last_completion", {"entity_id": entity_id}, blocking=True)
+    assert len(hass.states.get(entity_id).attributes["history"]) == 1
+
+    # Undoing the remaining completion reverts to the never-done state.
+    await hass.services.async_call(DOMAIN, "undo_last_completion", {"entity_id": entity_id}, blocking=True)
+    assert "history" not in hass.states.get(entity_id).attributes
+
+    # A further undo with nothing left is a safe no-op.
+    await hass.services.async_call(DOMAIN, "undo_last_completion", {"entity_id": entity_id}, blocking=True)
+    assert "history" not in hass.states.get(entity_id).attributes
+
+
 async def test_snooze_and_unsnooze_task_services(hass: HomeAssistant):
     """task_tracker.snooze_task and unsnooze_task work via the real
     service path, including the required 'until' field validation."""
